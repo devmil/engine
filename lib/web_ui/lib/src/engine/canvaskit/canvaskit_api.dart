@@ -1652,7 +1652,7 @@ class SkFont {
 class SkFontMgr {
   external String? getFamilyName(int fontId);
   external void delete();
-  external SkTypeface MakeTypefaceFromData(Uint8List font);
+  external SkTypeface? MakeTypefaceFromData(Uint8List font);
 }
 
 @JS('window.flutterCanvasKit.TypefaceFontProvider')
@@ -1663,11 +1663,29 @@ class TypefaceFontProvider extends SkFontMgr {
 
 @JS()
 @anonymous
+class SkLineMetrics {
+  external int get startIndex;
+  external int get endIndex;
+  external int get endExcludingWhitespaces;
+  external int get endIncludingNewline;
+  external bool get isHardBreak;
+  external double get ascent;
+  external double get descent;
+  external double get height;
+  external double get width;
+  external double get left;
+  external double get baseline;
+  external int get lineNumber;
+}
+
+@JS()
+@anonymous
 class SkParagraph {
   external double getAlphabeticBaseline();
   external bool didExceedMaxLines();
   external double getHeight();
   external double getIdeographicBaseline();
+  external List<SkLineMetrics> getLineMetrics();
   external double getLongestLine();
   external double getMaxIntrinsicWidth();
   external double getMinIntrinsicWidth();

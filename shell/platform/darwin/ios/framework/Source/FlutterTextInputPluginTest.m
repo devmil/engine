@@ -211,6 +211,24 @@ FLUTTER_ASSERT_ARC
   XCTAssertEqual(range.length, 2);
 }
 
+- (void)testTextInRange {
+  NSDictionary* config = self.mutableTemplateCopy;
+  [config setValue:@{@"name" : @"TextInputType.url"} forKey:@"inputType"];
+  [self setClientId:123 configuration:config];
+  NSArray<FlutterTextInputView*>* inputFields = self.installedInputViews;
+  FlutterTextInputView* inputView = inputFields[0];
+
+  [inputView insertText:@"test"];
+
+  UITextRange* range = [FlutterTextRange rangeWithNSRange:NSMakeRange(0, 20)];
+  NSString* substring = [inputView textInRange:range];
+  XCTAssertEqual(substring.length, 4);
+
+  range = [FlutterTextRange rangeWithNSRange:NSMakeRange(10, 20)];
+  substring = [inputView textInRange:range];
+  XCTAssertEqual(substring.length, 0);
+}
+
 - (void)testNoZombies {
   // Regression test for https://github.com/flutter/flutter/issues/62501.
   FlutterSecureTextInputView* passwordView = [[FlutterSecureTextInputView alloc] init];
@@ -867,9 +885,8 @@ FLUTTER_ASSERT_ARC
 
 - (void)testFlutterTextInputPluginRetainsFlutterTextInputView {
   FlutterTextInputPlugin* myInputPlugin;
-  id myEngine = OCMClassMock([FlutterEngine class]);
   myInputPlugin = [[FlutterTextInputPlugin alloc] init];
-  myInputPlugin.textInputDelegate = myEngine;
+  myInputPlugin.textInputDelegate = engine;
   __weak UIView* activeView;
   @autoreleasepool {
     FlutterMethodCall* setClientCall = [FlutterMethodCall
