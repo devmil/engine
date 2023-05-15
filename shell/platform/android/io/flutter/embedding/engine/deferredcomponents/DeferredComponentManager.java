@@ -61,7 +61,7 @@ public interface DeferredComponentManager {
    *
    * <p>The {@link DeferredComponentChannel} passes manual invocations of {@link
    * installDeferredComponent} and {@link getDeferredComponentInstallState} from the method channel
-   * to this DeferredComponentManager. Upon completion of the install process, sucessful
+   * to this DeferredComponentManager. Upon completion of the install process, successful
    * installations should notify the DeferredComponentChannel by calling {@link
    * DeferredComponentChannel.completeInstallSuccess} while errors and failures should call {@link
    * DeferredComponentChannel.completeInstallError}.
@@ -114,12 +114,12 @@ public interface DeferredComponentManager {
    *     negative loadingUnitId is passed, then componentName must not be null. Passing a
    *     loadingUnitId larger than the highest valid loading unit's id will cause the Dart
    *     loadLibrary() to complete with a failure.
-   * @param componentName The deferred component component name as defined in bundle_config.yaml.
-   *     This may be null if the deferred component to be loaded is associated with a loading
-   *     unit/deferred dart library. In this case, it is this method's responsibility to map the
-   *     loadingUnitId to its corresponding componentName. When loading asset-only or other deferred
-   *     components without an associated Dart deferred library, loading unit id should a negative
-   *     value and componentName must be non-null.
+   * @param componentName The deferred component name as defined in bundle_config.yaml. This may be
+   *     null if the deferred component to be loaded is associated with a loading unit/deferred dart
+   *     library. In this case, it is this method's responsibility to map the loadingUnitId to its
+   *     corresponding componentName. When loading asset-only or other deferred components without
+   *     an associated Dart deferred library, loading unit id should a negative value and
+   *     componentName must be non-null.
    */
   public abstract void installDeferredComponent(int loadingUnitId, String componentName);
 
@@ -142,7 +142,7 @@ public interface DeferredComponentManager {
    * implementation begins in the "requested" state before transitioning to the "downloading" and
    * "installed" states.
    *
-   * <p>Only sucessfully requested components have state. Modules that are invalid or have not been
+   * <p>Only successfully requested components have state. Modules that are invalid or have not been
    * requested with {@link installDeferredComponent} will not have a state. Due to the asynchronous
    * nature of the download process, components may not immediately have a valid state upon return
    * of {@link installDeferredComponent}, though valid components will eventually obtain a state.

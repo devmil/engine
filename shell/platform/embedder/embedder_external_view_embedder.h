@@ -40,7 +40,7 @@ class EmbedderExternalViewEmbedder final : public ExternalViewEmbedder {
   /// @brief      Creates an external view embedder used by the generic embedder
   ///             API.
   ///
-  /// @param[in] avoid_backing_store_cache If set, create_render_target callback
+  /// @param[in] avoid_backing_store_cache If set, create_render_target_callback
   ///                                      will beinvoked every frame for every
   ///                                      engine composited layer. The result
   ///                                      will not cached.
@@ -87,23 +87,18 @@ class EmbedderExternalViewEmbedder final : public ExternalViewEmbedder {
 
   // |ExternalViewEmbedder|
   void PrerollCompositeEmbeddedView(
-      int view_id,
+      int64_t view_id,
       std::unique_ptr<EmbeddedViewParams> params) override;
 
   // |ExternalViewEmbedder|
-  std::vector<SkCanvas*> GetCurrentCanvases() override;
+  DlCanvas* CompositeEmbeddedView(int64_t view_id) override;
 
   // |ExternalViewEmbedder|
-  SkCanvas* CompositeEmbeddedView(int view_id) override;
+  void SubmitFrame(GrDirectContext* context,
+                   std::unique_ptr<SurfaceFrame> frame) override;
 
   // |ExternalViewEmbedder|
-  void SubmitFrame(
-      GrDirectContext* context,
-      std::unique_ptr<SurfaceFrame> frame,
-      const std::shared_ptr<fml::SyncSwitch>& gpu_disable_sync_switch) override;
-
-  // |ExternalViewEmbedder|
-  SkCanvas* GetRootCanvas() override;
+  DlCanvas* GetRootCanvas() override;
 
  private:
   const bool avoid_backing_store_cache_;

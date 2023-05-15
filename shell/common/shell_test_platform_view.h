@@ -17,16 +17,17 @@ class ShellTestPlatformView : public PlatformView {
   enum class BackendType {
     kGLBackend,
     kVulkanBackend,
+    kMetalBackend,
     kDefaultBackend,
   };
 
   static std::unique_ptr<ShellTestPlatformView> Create(
       PlatformView::Delegate& delegate,
-      TaskRunners task_runners,
-      std::shared_ptr<ShellTestVsyncClock> vsync_clock,
-      CreateVsyncWaiter create_vsync_waiter,
+      const TaskRunners& task_runners,
+      const std::shared_ptr<ShellTestVsyncClock>& vsync_clock,
+      const CreateVsyncWaiter& create_vsync_waiter,
       BackendType backend,
-      std::shared_ptr<ShellTestExternalViewEmbedder>
+      const std::shared_ptr<ShellTestExternalViewEmbedder>&
           shell_test_external_view_embedder);
 
   virtual void SimulateVSync() = 0;

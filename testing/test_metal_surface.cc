@@ -7,6 +7,8 @@
 #include "flutter/fml/logging.h"
 #include "flutter/testing/test_metal_surface_impl.h"
 
+#include "third_party/skia/include/core/SkSurface.h"
+
 namespace flutter {
 
 bool TestMetalSurface::PlatformSupportsMetal() {
@@ -46,6 +48,10 @@ sk_sp<SkSurface> TestMetalSurface::GetSurface() const {
 
 sk_sp<SkImage> TestMetalSurface::GetRasterSurfaceSnapshot() {
   return impl_ ? impl_->GetRasterSurfaceSnapshot() : nullptr;
+}
+
+TestMetalContext::TextureInfo TestMetalSurface::GetTextureInfo() {
+  return impl_ ? impl_->GetTextureInfo() : TestMetalContext::TextureInfo();
 }
 
 }  // namespace flutter

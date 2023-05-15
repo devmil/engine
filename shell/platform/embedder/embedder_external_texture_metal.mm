@@ -4,6 +4,7 @@
 
 #include "flutter/shell/platform/embedder/embedder_external_texture_metal.h"
 
+#include "flow/layers/layer.h"
 #include "flutter/fml/logging.h"
 #import "flutter/shell/platform/darwin/graphics/FlutterDarwinExternalTextureMetal.h"
 #include "third_party/skia/include/core/SkImage.h"
@@ -31,33 +32,35 @@ EmbedderExternalTextureMetal::EmbedderExternalTextureMetal(int64_t texture_ident
 EmbedderExternalTextureMetal::~EmbedderExternalTextureMetal() = default;
 
 // |flutter::Texture|
-void EmbedderExternalTextureMetal::Paint(SkCanvas& canvas,
+void EmbedderExternalTextureMetal::Paint(PaintContext& context,
                                          const SkRect& bounds,
                                          bool freeze,
-                                         GrDirectContext* context,
-                                         const SkSamplingOptions& sampling) {
-  if (auto image = ResolveTexture(Id(), context, SkISize::Make(bounds.width(), bounds.height()))) {
-    last_image_ = image;
+                                         const DlImageSampling sampling) {
+  if (last_image_ == nullptr) {
+    last_image_ =
+        ResolveTexture(Id(), context.gr_context, SkISize::Make(bounds.width(), bounds.height()));
   }
 
+  DlCanvas* canvas = context.canvas;
+  const DlPaint* paint = context.paint;
+
   if (last_image_) {
-    if (bounds != SkRect::Make(last_image_->bounds())) {
-      canvas.drawImageRect(last_image_, bounds, sampling);
+    SkRect image_bounds = SkRect::Make(last_image_->bounds());
+    if (bounds != image_bounds) {
+      canvas->DrawImageRect(last_image_, image_bounds, bounds, sampling, paint);
     } else {
-      canvas.drawImage(last_image_, bounds.x(), bounds.y(), sampling, nullptr);
+      canvas->DrawImage(last_image_, {bounds.x(), bounds.y()}, sampling, paint);
     }
   }
 }
 
-sk_sp<SkImage> EmbedderExternalTextureMetal::ResolveTexture(int64_t texture_id,
+sk_sp<DlImage> EmbedderExternalTextureMetal::ResolveTexture(int64_t texture_id,
                                                             GrDirectContext* context,
                                                             const SkISize& size) {
   std::unique_ptr<FlutterMetalExternalTexture> texture =
       external_texture_callback_(texture_id, size.width(), size.height());
 
   if (!texture) {
-    FML_LOG(ERROR) << "External texture callback for ID " << texture_id
-                   << " did not return a valid texture.";
     return nullptr;
   }
 
@@ -78,8 +81,13 @@ sk_sp<SkImage> EmbedderExternalTextureMetal::ResolveTexture(int64_t texture_id,
       if (ValidNumTextures(2, texture->num_textures)) {
         id<MTLTexture> yTex = (__bridge id<MTLTexture>)texture->textures[0];
         id<MTLTexture> uvTex = (__bridge id<MTLTexture>)texture->textures[1];
+        SkYUVColorSpace colorSpace =
+            texture->yuv_color_space == FlutterMetalExternalTextureYUVColorSpace::kBT601LimitedRange
+                ? kRec601_Limited_SkYUVColorSpace
+                : kJPEG_Full_SkYUVColorSpace;
         image = [FlutterDarwinExternalTextureSkImageWrapper wrapYUVATexture:yTex
                                                                       UVTex:uvTex
+                                                              YUVColorSpace:colorSpace
                                                                   grContext:context
                                                                       width:size.width()
                                                                      height:size.height()];
@@ -92,7 +100,8 @@ sk_sp<SkImage> EmbedderExternalTextureMetal::ResolveTexture(int64_t texture_id,
     FML_LOG(ERROR) << "Could not create external texture: " << texture_id;
   }
 
-  return image;
+  // This image should not escape local use by EmbedderExternalTextureMetal
+  return DlImage::Make(std::move(image));
 }
 
 // |flutter::Texture|
@@ -102,7 +111,9 @@ void EmbedderExternalTextureMetal::OnGrContextCreated() {}
 void EmbedderExternalTextureMetal::OnGrContextDestroyed() {}
 
 // |flutter::Texture|
-void EmbedderExternalTextureMetal::MarkNewFrameAvailable() {}
+void EmbedderExternalTextureMetal::MarkNewFrameAvailable() {
+  last_image_ = nullptr;
+}
 
 // |flutter::Texture|
 void EmbedderExternalTextureMetal::OnTextureUnregistered() {}

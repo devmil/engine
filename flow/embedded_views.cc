@@ -6,10 +6,44 @@
 
 namespace flutter {
 
-void ExternalViewEmbedder::SubmitFrame(
-    GrDirectContext* context,
-    std::unique_ptr<SurfaceFrame> frame,
-    const std::shared_ptr<fml::SyncSwitch>& gpu_disable_sync_switch) {
+DisplayListEmbedderViewSlice::DisplayListEmbedderViewSlice(SkRect view_bounds) {
+  builder_ = std::make_unique<DisplayListBuilder>(
+      /*bounds=*/view_bounds,
+      /*prepare_rtree=*/true);
+}
+
+DlCanvas* DisplayListEmbedderViewSlice::canvas() {
+  return builder_ ? builder_.get() : nullptr;
+}
+
+void DisplayListEmbedderViewSlice::end_recording() {
+  display_list_ = builder_->Build();
+  builder_ = nullptr;
+}
+
+std::list<SkRect> DisplayListEmbedderViewSlice::searchNonOverlappingDrawnRects(
+    const SkRect& query) const {
+  return display_list_->rtree()->searchAndConsolidateRects(query);
+}
+
+void DisplayListEmbedderViewSlice::render_into(DlCanvas* canvas) {
+  canvas->DrawDisplayList(display_list_);
+}
+
+void DisplayListEmbedderViewSlice::dispatch(DlOpReceiver& receiver) {
+  display_list_->Dispatch(receiver);
+}
+
+bool DisplayListEmbedderViewSlice::is_empty() {
+  return display_list_->bounds().isEmpty();
+}
+
+bool DisplayListEmbedderViewSlice::recording_ended() {
+  return builder_ == nullptr;
+}
+
+void ExternalViewEmbedder::SubmitFrame(GrDirectContext* context,
+                                       std::unique_ptr<SurfaceFrame> frame) {
   frame->Submit();
 };
 
@@ -38,9 +72,23 @@ void MutatorsStack::PushOpacity(const int& alpha) {
   vector_.push_back(element);
 };
 
+void MutatorsStack::PushBackdropFilter(
+    const std::shared_ptr<const DlImageFilter>& filter,
+    const SkRect& filter_rect) {
+  std::shared_ptr<Mutator> element =
+      std::make_shared<Mutator>(filter, filter_rect);
+  vector_.push_back(element);
+};
+
 void MutatorsStack::Pop() {
   vector_.pop_back();
 };
+
+void MutatorsStack::PopTo(size_t stack_count) {
+  while (vector_.size() > stack_count) {
+    Pop();
+  }
+}
 
 const std::vector<std::shared_ptr<Mutator>>::const_reverse_iterator
 MutatorsStack::Top() const {
@@ -65,5 +113,7 @@ const std::vector<std::shared_ptr<Mutator>>::const_iterator MutatorsStack::End()
 bool ExternalViewEmbedder::SupportsDynamicThreadMerging() {
   return false;
 }
+
+void ExternalViewEmbedder::Teardown() {}
 
 }  // namespace flutter

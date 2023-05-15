@@ -5,7 +5,8 @@
 #ifndef SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERDARTPROJECT_INTERNAL_H_
 #define SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERDARTPROJECT_INTERNAL_H_
 
-#import "flutter/shell/platform/darwin/macos/framework/Headers/FlutterDartProject.h"
+#import "flutter/shell/platform/darwin/common/framework/Headers/FlutterDartProject.h"
+#import "flutter/shell/platform/darwin/common/framework/Source/FlutterNSBundleUtils.h"
 
 #include <string>
 #include <vector>
@@ -26,9 +27,9 @@
 @property(nonatomic, readonly, nullable) NSString* ICUDataPath;
 
 /**
- * The command line arguments array for the engine.
+ * The callback invoked by the engine in root isolate scope.
  */
-@property(nonatomic, readonly) std::vector<std::string> switches;
+@property(nonatomic, nullable) void (*rootIsolateCreateCallback)(void* _Nullable);
 
 /**
  * Instead of looking up the assets and ICU data path in the application bundle, this initializer

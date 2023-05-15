@@ -43,20 +43,33 @@
         @"platform_view_multiple_background_foreground",
     @"--platform-view-cliprect" : @"platform_view_cliprect",
     @"--platform-view-cliprrect" : @"platform_view_cliprrect",
+    @"--platform-view-large-cliprrect" : @"platform_view_large_cliprrect",
     @"--platform-view-clippath" : @"platform_view_clippath",
+    @"--platform-view-cliprrect-with-transform" : @"platform_view_cliprrect_with_transform",
+    @"--platform-view-large-cliprrect-with-transform" :
+        @"platform_view_large_cliprrect_with_transform",
+    @"--platform-view-cliprect-with-transform" : @"platform_view_cliprect_with_transform",
+    @"--platform-view-clippath-with-transform" : @"platform_view_clippath_with_transform",
     @"--platform-view-transform" : @"platform_view_transform",
     @"--platform-view-opacity" : @"platform_view_opacity",
+    @"--platform-view-with-other-backdrop-filter" : @"platform_view_with_other_backdrop_filter",
+    @"--two-platform-views-with-other-backdrop-filter" :
+        @"two_platform_views_with_other_backdrop_filter",
     @"--platform-view-rotate" : @"platform_view_rotate",
     @"--non-full-screen-flutter-view-platform-view" : @"non_full_screen_flutter_view_platform_view",
     @"--gesture-reject-after-touches-ended" : @"platform_view_gesture_reject_after_touches_ended",
     @"--gesture-reject-eager" : @"platform_view_gesture_reject_eager",
     @"--gesture-accept" : @"platform_view_gesture_accept",
+    @"--gesture-accept-with-overlapping-platform-views" :
+        @"platform_view_gesture_accept_with_overlapping_platform_views",
     @"--tap-status-bar" : @"tap_status_bar",
-    @"--text-semantics-focus" : @"text_semantics_focus",
     @"--animated-color-square" : @"animated_color_square",
     @"--platform-view-with-continuous-texture" : @"platform_view_with_continuous_texture",
     @"--bogus-font-text" : @"bogus_font_text",
     @"--spawn-engine-works" : @"spawn_engine_works",
+    @"--pointer-events" : @"pointer_events",
+    @"--platform-view-scrolling-under-widget" : @"platform_view_scrolling_under_widget",
+    @"--platform-view-cliprect-after-moved" : @"platform_view_cliprect_after_moved"
   };
   __block NSString* flutterViewControllerTestName = nil;
   [launchArgsMap
@@ -87,7 +100,7 @@
     FlutterEngine* spawner = [[FlutterEngine alloc] initWithName:@"FlutterControllerTest"
                                                          project:nil];
     [spawner run];
-    return [spawner spawnWithEntrypoint:nil libraryURI:nil];
+    return [spawner spawnWithEntrypoint:nil libraryURI:nil initialRoute:nil entrypointArgs:nil];
   } else {
     FlutterEngine* engine = [[FlutterEngine alloc] initWithName:@"FlutterControllerTest"
                                                         project:nil];
@@ -109,6 +122,7 @@
   FlutterEngine* engine = [self engineForTest:scenarioIdentifier];
   FlutterViewController* flutterViewController =
       [self flutterViewControllerForTest:scenarioIdentifier withEngine:engine];
+  flutterViewController.view.accessibilityIdentifier = @"flutter_view";
 
   [engine.binaryMessenger
       setMessageHandlerOnChannel:@"waiting_for_status"

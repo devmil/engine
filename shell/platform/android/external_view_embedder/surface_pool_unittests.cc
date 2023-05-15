@@ -36,7 +36,7 @@ class TestAndroidSurfaceFactory : public AndroidSurfaceFactory {
   TestSurfaceProducer surface_producer_;
 };
 
-TEST(SurfacePool, GetLayer__AllocateOneLayer) {
+TEST(SurfacePool, GetLayerAllocateOneLayer) {
   auto pool = std::make_unique<SurfacePool>();
 
   auto gr_context = GrDirectContext::MakeMock(nullptr);
@@ -50,10 +50,9 @@ TEST(SurfacePool, GetLayer__AllocateOneLayer) {
           ByMove(std::make_unique<PlatformViewAndroidJNI::OverlayMetadata>(
               0, window))));
 
-  auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+  auto surface_factory =
+      std::make_shared<TestAndroidSurfaceFactory>([gr_context, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         EXPECT_CALL(*android_surface_mock, CreateGPUSurface(gr_context.get()));
         EXPECT_CALL(*android_surface_mock, SetNativeWindow(window));
         EXPECT_CALL(*android_surface_mock, IsValid()).WillOnce(Return(true));
@@ -62,6 +61,7 @@ TEST(SurfacePool, GetLayer__AllocateOneLayer) {
   auto layer = pool->GetLayer(gr_context.get(), *android_context, jni_mock,
                               surface_factory);
 
+  ASSERT_TRUE(pool->HasLayers());
   ASSERT_NE(nullptr, layer);
   ASSERT_EQ(reinterpret_cast<intptr_t>(gr_context.get()),
             layer->gr_context_key);
@@ -81,10 +81,9 @@ TEST(SurfacePool, GetUnusedLayers) {
           ByMove(std::make_unique<PlatformViewAndroidJNI::OverlayMetadata>(
               0, window))));
 
-  auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+  auto surface_factory =
+      std::make_shared<TestAndroidSurfaceFactory>([gr_context, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         EXPECT_CALL(*android_surface_mock, CreateGPUSurface(gr_context.get()));
         EXPECT_CALL(*android_surface_mock, SetNativeWindow(window));
         EXPECT_CALL(*android_surface_mock, IsValid()).WillOnce(Return(true));
@@ -96,11 +95,12 @@ TEST(SurfacePool, GetUnusedLayers) {
 
   pool->RecycleLayers();
 
+  ASSERT_TRUE(pool->HasLayers());
   ASSERT_EQ(1UL, pool->GetUnusedLayers().size());
   ASSERT_EQ(layer, pool->GetUnusedLayers()[0]);
 }
 
-TEST(SurfacePool, GetLayer__Recycle) {
+TEST(SurfacePool, GetLayerRecycle) {
   auto pool = std::make_unique<SurfacePool>();
 
   auto gr_context_1 = GrDirectContext::MakeMock(nullptr);
@@ -116,9 +116,8 @@ TEST(SurfacePool, GetLayer__Recycle) {
 
   auto gr_context_2 = GrDirectContext::MakeMock(nullptr);
   auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context_1, gr_context_2, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+      [gr_context_1, gr_context_2, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         // Allocate two GPU surfaces for each gr context.
         EXPECT_CALL(*android_surface_mock,
                     CreateGPUSurface(gr_context_1.get()));
@@ -137,6 +136,7 @@ TEST(SurfacePool, GetLayer__Recycle) {
   auto layer_2 = pool->GetLayer(gr_context_2.get(), *android_context, jni_mock,
                                 surface_factory);
 
+  ASSERT_TRUE(pool->HasLayers());
   ASSERT_NE(nullptr, layer_1);
   ASSERT_EQ(layer_1, layer_2);
   ASSERT_EQ(reinterpret_cast<intptr_t>(gr_context_2.get()),
@@ -145,7 +145,7 @@ TEST(SurfacePool, GetLayer__Recycle) {
             layer_2->gr_context_key);
 }
 
-TEST(SurfacePool, GetLayer__AllocateTwoLayers) {
+TEST(SurfacePool, GetLayerAllocateTwoLayers) {
   auto pool = std::make_unique<SurfacePool>();
 
   auto gr_context = GrDirectContext::MakeMock(nullptr);
@@ -163,10 +163,9 @@ TEST(SurfacePool, GetLayer__AllocateTwoLayers) {
           ByMove(std::make_unique<PlatformViewAndroidJNI::OverlayMetadata>(
               1, window))));
 
-  auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+  auto surface_factory =
+      std::make_shared<TestAndroidSurfaceFactory>([gr_context, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         EXPECT_CALL(*android_surface_mock, CreateGPUSurface(gr_context.get()));
         EXPECT_CALL(*android_surface_mock, SetNativeWindow(window));
         EXPECT_CALL(*android_surface_mock, IsValid()).WillOnce(Return(true));
@@ -176,6 +175,8 @@ TEST(SurfacePool, GetLayer__AllocateTwoLayers) {
                                 surface_factory);
   auto layer_2 = pool->GetLayer(gr_context.get(), *android_context, jni_mock,
                                 surface_factory);
+
+  ASSERT_TRUE(pool->HasLayers());
   ASSERT_NE(nullptr, layer_1);
   ASSERT_NE(nullptr, layer_2);
   ASSERT_NE(layer_1, layer_2);
@@ -201,10 +202,9 @@ TEST(SurfacePool, DestroyLayers) {
           ByMove(std::make_unique<PlatformViewAndroidJNI::OverlayMetadata>(
               0, window))));
 
-  auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+  auto surface_factory =
+      std::make_shared<TestAndroidSurfaceFactory>([gr_context, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         EXPECT_CALL(*android_surface_mock, CreateGPUSurface(gr_context.get()));
         EXPECT_CALL(*android_surface_mock, SetNativeWindow(window));
         EXPECT_CALL(*android_surface_mock, IsValid()).WillOnce(Return(true));
@@ -213,13 +213,15 @@ TEST(SurfacePool, DestroyLayers) {
   pool->GetLayer(gr_context.get(), *android_context, jni_mock, surface_factory);
 
   EXPECT_CALL(*jni_mock, FlutterViewDestroyOverlaySurfaces());
+
+  ASSERT_TRUE(pool->HasLayers());
   pool->DestroyLayers(jni_mock);
 
-  pool->RecycleLayers();
+  ASSERT_FALSE(pool->HasLayers());
   ASSERT_TRUE(pool->GetUnusedLayers().empty());
 }
 
-TEST(SurfacePool, DestroyLayers__frameSizeChanged) {
+TEST(SurfacePool, DestroyLayersFrameSizeChanged) {
   auto pool = std::make_unique<SurfacePool>();
   auto jni_mock = std::make_shared<JNIMock>();
 
@@ -229,10 +231,9 @@ TEST(SurfacePool, DestroyLayers__frameSizeChanged) {
 
   auto window = fml::MakeRefCounted<AndroidNativeWindow>(nullptr);
 
-  auto surface_factory = std::make_shared<TestAndroidSurfaceFactory>(
-      [&android_context, gr_context, window]() {
-        auto android_surface_mock =
-            std::make_unique<AndroidSurfaceMock>(android_context);
+  auto surface_factory =
+      std::make_shared<TestAndroidSurfaceFactory>([gr_context, window]() {
+        auto android_surface_mock = std::make_unique<AndroidSurfaceMock>();
         EXPECT_CALL(*android_surface_mock, CreateGPUSurface(gr_context.get()));
         EXPECT_CALL(*android_surface_mock, SetNativeWindow(window));
         EXPECT_CALL(*android_surface_mock, IsValid()).WillOnce(Return(true));
@@ -246,7 +247,11 @@ TEST(SurfacePool, DestroyLayers__frameSizeChanged) {
           ByMove(std::make_unique<PlatformViewAndroidJNI::OverlayMetadata>(
               0, window))));
 
+  ASSERT_FALSE(pool->HasLayers());
+
   pool->GetLayer(gr_context.get(), *android_context, jni_mock, surface_factory);
+
+  ASSERT_TRUE(pool->HasLayers());
 
   pool->SetFrameSize(SkISize::Make(20, 20));
   EXPECT_CALL(*jni_mock, FlutterViewDestroyOverlaySurfaces()).Times(1);
@@ -258,6 +263,7 @@ TEST(SurfacePool, DestroyLayers__frameSizeChanged) {
   pool->GetLayer(gr_context.get(), *android_context, jni_mock, surface_factory);
 
   ASSERT_TRUE(pool->GetUnusedLayers().empty());
+  ASSERT_TRUE(pool->HasLayers());
 }
 
 }  // namespace testing

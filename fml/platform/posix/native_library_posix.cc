@@ -13,8 +13,10 @@ NativeLibrary::NativeLibrary(const char* path) {
   ::dlerror();
   handle_ = ::dlopen(path, RTLD_NOW);
   if (handle_ == nullptr) {
-    FML_DLOG(ERROR) << "Could not open library '" << path << "' due to error '"
-                    << ::dlerror() << "'.";
+    // TODO(jiahaog): Use FML_DLOG:
+    // https://github.com/flutter/flutter/issues/125523
+    FML_LOG(ERROR) << "Could not open library '" << path << "' due to error '"
+                   << ::dlerror() << "'.";
   }
 }
 
@@ -57,12 +59,8 @@ fml::RefPtr<NativeLibrary> NativeLibrary::CreateForCurrentProcess() {
   return fml::AdoptRef(new NativeLibrary(RTLD_DEFAULT, false));
 }
 
-const uint8_t* NativeLibrary::ResolveSymbol(const char* symbol) {
-  auto* resolved_symbol = static_cast<const uint8_t*>(::dlsym(handle_, symbol));
-  if (resolved_symbol == nullptr) {
-    FML_DLOG(INFO) << "Could not resolve symbol in library: " << symbol;
-  }
-  return resolved_symbol;
+NativeLibrary::SymbolHandle NativeLibrary::Resolve(const char* symbol) const {
+  return ::dlsym(handle_, symbol);
 }
 
 }  // namespace fml

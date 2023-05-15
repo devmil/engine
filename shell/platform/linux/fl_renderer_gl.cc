@@ -23,13 +23,15 @@ static gboolean fl_renderer_gl_create_contexts(FlRenderer* renderer,
 
   *visible = gdk_window_create_gl_context(window, error);
 
-  if (*error != nullptr)
+  if (*error != nullptr) {
     return FALSE;
+  }
 
   *resource = gdk_window_create_gl_context(window, error);
 
-  if (*error != nullptr)
+  if (*error != nullptr) {
     return FALSE;
+  }
   return TRUE;
 }
 
@@ -93,20 +95,19 @@ static gboolean fl_renderer_gl_present_layers(FlRenderer* renderer,
                                               size_t layers_count) {
   FlView* view = fl_renderer_get_view(renderer);
   GdkGLContext* context = fl_renderer_get_context(renderer);
-  if (!view || !context)
+  if (!view || !context) {
     return FALSE;
-  fl_view_begin_frame(view);
+  }
 
+  g_autoptr(GPtrArray) textures = g_ptr_array_new();
   for (size_t i = 0; i < layers_count; ++i) {
     const FlutterLayer* layer = layers[i];
     switch (layer->type) {
       case kFlutterLayerContentTypeBackingStore: {
         const FlutterBackingStore* backing_store = layer->backing_store;
         auto framebuffer = &backing_store->open_gl.framebuffer;
-        g_object_ref(context);
-        fl_view_add_gl_area(
-            view, context,
-            reinterpret_cast<FlBackingStoreProvider*>(framebuffer->user_data));
+        g_ptr_array_add(textures, reinterpret_cast<FlBackingStoreProvider*>(
+                                      framebuffer->user_data));
       } break;
       case kFlutterLayerContentTypePlatformView: {
         // Currently unsupported.
@@ -114,7 +115,8 @@ static gboolean fl_renderer_gl_present_layers(FlRenderer* renderer,
     }
   }
 
-  fl_view_end_frame(view);
+  fl_view_set_textures(view, context, textures);
+
   return TRUE;
 }
 

@@ -2,21 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+import 'dart:typed_data';
+
+import 'package:ui/ui.dart' as ui;
+
+import '../vector_math.dart';
+import 'layer.dart';
+import 'layer_tree.dart';
+import 'path.dart';
+import 'picture.dart';
 
 class LayerScene implements ui.Scene {
-  final LayerTree layerTree;
-
   LayerScene(RootLayer rootLayer) : layerTree = LayerTree(rootLayer);
+
+  final LayerTree layerTree;
 
   @override
   void dispose() {}
 
   @override
   Future<ui.Image> toImage(int width, int height) {
-    ui.Picture picture = layerTree.flatten();
+    final ui.Picture picture = layerTree.flatten();
     return picture.toImage(width, height);
+  }
+
+  @override
+  ui.Image toImageSync(int width, int height) {
+    final ui.Picture picture = layerTree.flatten();
+    return picture.toImageSync(width, height);
   }
 }
 
@@ -27,17 +40,6 @@ class LayerSceneBuilder implements ui.SceneBuilder {
 
   final RootLayer rootLayer;
   late ContainerLayer currentLayer;
-
-  @override
-  void addChildScene({
-    ui.Offset offset = ui.Offset.zero,
-    double width = 0.0,
-    double height = 0.0,
-    ui.SceneHost? sceneHost,
-    bool hitTestable = true,
-  }) {
-    throw UnimplementedError();
-  }
 
   @override
   void addPerformanceOverlay(int enabledOptions, ui.Rect bounds) {
@@ -70,7 +72,7 @@ class LayerSceneBuilder implements ui.SceneBuilder {
     bool freeze = false,
     ui.FilterQuality filterQuality = ui.FilterQuality.low,
   }) {
-    // TODO(b/128315641): implement addTexture.
+    // TODO(hterkelsen): implement addTexture, b/128315641
   }
 
   @override
@@ -99,55 +101,62 @@ class LayerSceneBuilder implements ui.SceneBuilder {
   }
 
   @override
-  BackdropFilterEngineLayer? pushBackdropFilter(
+  BackdropFilterEngineLayer pushBackdropFilter(
     ui.ImageFilter filter, {
+    ui.BlendMode blendMode = ui.BlendMode.srcOver,
     ui.EngineLayer? oldLayer,
   }) {
-    return pushLayer<BackdropFilterEngineLayer>(BackdropFilterEngineLayer(filter));
+    return pushLayer<BackdropFilterEngineLayer>(BackdropFilterEngineLayer(
+      filter,
+      blendMode,
+    ));
   }
 
   @override
-  ClipPathEngineLayer? pushClipPath(
+  ClipPathEngineLayer pushClipPath(
     ui.Path path, {
     ui.Clip clipBehavior = ui.Clip.antiAlias,
     ui.EngineLayer? oldLayer,
   }) {
-    return pushLayer<ClipPathEngineLayer>(ClipPathEngineLayer(path as CkPath, clipBehavior));
+    return pushLayer<ClipPathEngineLayer>(
+        ClipPathEngineLayer(path as CkPath, clipBehavior));
   }
 
   @override
-  ClipRRectEngineLayer? pushClipRRect(
+  ClipRRectEngineLayer pushClipRRect(
     ui.RRect rrect, {
     ui.Clip? clipBehavior,
     ui.EngineLayer? oldLayer,
   }) {
-    return pushLayer<ClipRRectEngineLayer>(ClipRRectEngineLayer(rrect, clipBehavior));
+    return pushLayer<ClipRRectEngineLayer>(
+        ClipRRectEngineLayer(rrect, clipBehavior));
   }
 
   @override
-  ClipRectEngineLayer? pushClipRect(
+  ClipRectEngineLayer pushClipRect(
     ui.Rect rect, {
     ui.Clip clipBehavior = ui.Clip.antiAlias,
     ui.EngineLayer? oldLayer,
   }) {
-    return pushLayer<ClipRectEngineLayer>(ClipRectEngineLayer(rect, clipBehavior));
+    return pushLayer<ClipRectEngineLayer>(
+        ClipRectEngineLayer(rect, clipBehavior));
   }
 
   @override
-  ColorFilterEngineLayer? pushColorFilter(
+  ColorFilterEngineLayer pushColorFilter(
     ui.ColorFilter filter, {
     ui.ColorFilterEngineLayer? oldLayer,
   }) {
-    assert(filter != null); // ignore: unnecessary_null_comparison
     return pushLayer<ColorFilterEngineLayer>(ColorFilterEngineLayer(filter));
   }
 
-  ImageFilterEngineLayer? pushImageFilter(
+  @override
+  ImageFilterEngineLayer pushImageFilter(
     ui.ImageFilter filter, {
     ui.ImageFilterEngineLayer? oldLayer,
+    ui.Offset offset = ui.Offset.zero,
   }) {
-    assert(filter != null); // ignore: unnecessary_null_comparison
-    return pushLayer<ImageFilterEngineLayer>(ImageFilterEngineLayer(filter));
+    return pushLayer<ImageFilterEngineLayer>(ImageFilterEngineLayer(filter, offset));
   }
 
   @override
@@ -169,36 +178,19 @@ class LayerSceneBuilder implements ui.SceneBuilder {
   }
 
   @override
-  PhysicalShapeEngineLayer pushPhysicalShape({
-    required ui.Path path,
-    required double elevation,
-    required ui.Color color,
-    ui.Color? shadowColor,
-    ui.Clip clipBehavior = ui.Clip.none,
-    ui.EngineLayer? oldLayer,
-  }) {
-    return pushLayer<PhysicalShapeEngineLayer>(PhysicalShapeEngineLayer(
-      elevation,
-      color,
-      shadowColor,
-      path as CkPath,
-      clipBehavior,
-    ));
-  }
-
-  @override
   ShaderMaskEngineLayer pushShaderMask(
     ui.Shader shader,
     ui.Rect maskRect,
     ui.BlendMode blendMode, {
     ui.EngineLayer? oldLayer,
+    ui.FilterQuality filterQuality = ui.FilterQuality.low,
   }) {
-    return pushLayer<ShaderMaskEngineLayer>(ShaderMaskEngineLayer(
-        shader, maskRect, blendMode));
+    return pushLayer<ShaderMaskEngineLayer>(
+        ShaderMaskEngineLayer(shader, maskRect, blendMode, filterQuality));
   }
 
   @override
-  TransformEngineLayer? pushTransform(
+  TransformEngineLayer pushTransform(
     Float64List matrix4, {
     ui.EngineLayer? oldLayer,
   }) {
@@ -208,17 +200,17 @@ class LayerSceneBuilder implements ui.SceneBuilder {
 
   @override
   void setCheckerboardOffscreenLayers(bool checkerboard) {
-    // TODO: implement setCheckerboardOffscreenLayers
+    // TODO(hterkelsen): implement setCheckerboardOffscreenLayers
   }
 
   @override
   void setCheckerboardRasterCacheImages(bool checkerboard) {
-    // TODO: implement setCheckerboardRasterCacheImages
+    // TODO(hterkelsen): implement setCheckerboardRasterCacheImages
   }
 
   @override
   void setRasterizerTracingThreshold(int frameInterval) {
-    // TODO: implement setRasterizerTracingThreshold
+    // TODO(hterkelsen): implement setRasterizerTracingThreshold
   }
 
   T pushLayer<T extends ContainerLayer>(T layer) {

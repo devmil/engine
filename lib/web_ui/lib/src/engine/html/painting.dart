@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+import 'package:ui/ui.dart' as ui;
+
+import '../color_filter.dart';
+import '../util.dart';
 
 /// Implementation of [ui.Paint] used by the HTML rendering backend.
 class SurfacePaint implements ui.Paint {
@@ -82,7 +84,7 @@ class SurfacePaint implements ui.Paint {
   }
 
   @override
-  ui.Color get color => _paintData.color ?? _defaultPaintColor;
+  ui.Color get color => ui.Color(_paintData.color);
 
   @override
   set color(ui.Color value) {
@@ -90,8 +92,7 @@ class SurfacePaint implements ui.Paint {
       _paintData = _paintData.clone();
       _frozen = false;
     }
-    _paintData.color =
-        value.runtimeType == ui.Color ? value : ui.Color(value.value);
+    _paintData.color = value.value;
   }
 
   @override
@@ -102,7 +103,7 @@ class SurfacePaint implements ui.Paint {
   @override
   set invertColors(bool value) {}
 
-  static const ui.Color _defaultPaintColor = ui.Color(0xFF000000);
+  static const int _defaultPaintColor = 0xFF000000;
 
   @override
   ui.Shader? get shader => _paintData.shader;
@@ -149,10 +150,10 @@ class SurfacePaint implements ui.Paint {
       _paintData = _paintData.clone();
       _frozen = false;
     }
-    _paintData.colorFilter = value;
+    _paintData.colorFilter = value as EngineColorFilter?;
   }
 
-  // TODO(flutter_web): see https://github.com/flutter/flutter/issues/33605
+  // TODO(ferhat): see https://github.com/flutter/flutter/issues/33605
   @override
   double get strokeMiterLimit {
     throw UnsupportedError('SurfacePaint.strokeMiterLimit');
@@ -160,18 +161,18 @@ class SurfacePaint implements ui.Paint {
 
   @override
   set strokeMiterLimit(double value) {
-    assert(value != null); // ignore: unnecessary_null_comparison
+
   }
 
   @override
   ui.ImageFilter? get imageFilter {
-    // TODO(flutter/flutter#35156): Implement ImageFilter.
+    // TODO(ferhat): Implement ImageFilter, flutter/flutter#35156.
     return null;
   }
 
   @override
   set imageFilter(ui.ImageFilter? value) {
-    // TODO(flutter/flutter#35156): Implement ImageFilter.
+    // TODO(ferhat): Implement ImageFilter, flutter/flutter#35156
   }
 
   // True if Paint instance has used in RecordingCanvas.
@@ -192,19 +193,21 @@ class SurfacePaint implements ui.Paint {
     result.write('Paint(');
     if (style == ui.PaintingStyle.stroke) {
       result.write('$style');
-      if (strokeWidth != 0.0)
+      if (strokeWidth != 0.0) {
         result.write(' $strokeWidth');
-      else
+      } else {
         result.write(' hairline');
-      if (strokeCap != ui.StrokeCap.butt)
+      }
+      if (strokeCap != ui.StrokeCap.butt) {
         result.write(' $strokeCap');
+      }
       semicolon = '; ';
     }
     if (isAntiAlias != true) {
       result.write('${semicolon}antialias off');
       semicolon = '; ';
     }
-    if (color != _defaultPaintColor) {
+    if (color.value != _defaultPaintColor) {
       result.write('$semicolon$color');
       semicolon = '; ';
     }
@@ -222,11 +225,11 @@ class SurfacePaintData {
   ui.StrokeCap? strokeCap;
   ui.StrokeJoin? strokeJoin;
   bool isAntiAlias = true;
-  ui.Color? color;
+  int color = 0xFF000000;
   ui.Shader? shader;
   ui.MaskFilter? maskFilter;
   ui.FilterQuality? filterQuality;
-  ui.ColorFilter? colorFilter;
+  EngineColorFilter? colorFilter;
 
   // Internal for recording canvas use.
   SurfacePaintData clone() {
@@ -265,9 +268,7 @@ class SurfacePaintData {
       if (strokeJoin != null) {
         buffer.write('strokeJoin = $strokeJoin; ');
       }
-      if (color != null) {
-        buffer.write('color = ${colorToCssString(color)}; ');
-      }
+      buffer.write('color = ${ui.Color(color).toCssString()}; ');
       if (shader != null) {
         buffer.write('shader = $shader; ');
       }
@@ -283,5 +284,34 @@ class SurfacePaintData {
       buffer.write('isAntiAlias = $isAntiAlias)');
       return buffer.toString();
     }
+  }
+}
+
+class HtmlFragmentProgram implements ui.FragmentProgram {
+  @override
+  ui.FragmentShader fragmentShader() {
+    throw UnsupportedError('FragmentProgram is not supported for the HTML renderer.');
+  }
+}
+
+class HtmlFragmentShader implements ui.FragmentShader {
+  @override
+  void setFloat(int index, double value) {
+    throw UnsupportedError('FragmentShader is not supported for the HTML renderer.');
+  }
+
+  @override
+  void setImageSampler(int index, ui.Image image) {
+    throw UnsupportedError('FragmentShader is not supported for the HTML renderer.');
+  }
+
+  @override
+  void dispose() {
+    throw UnsupportedError('FragmentShader is not supported for the HTML renderer.');
+  }
+
+  @override
+  bool get debugDisposed {
+    throw UnsupportedError('FragmentShader is not supported for the HTML renderer.');
   }
 }

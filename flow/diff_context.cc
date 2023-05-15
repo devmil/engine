@@ -1,48 +1,117 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "flutter/flow/diff_context.h"
 #include "flutter/flow/layers/layer.h"
 
 namespace flutter {
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 DiffContext::DiffContext(SkISize frame_size,
-                         double frame_device_pixel_ratio,
                          PaintRegionMap& this_frame_paint_region_map,
-                         const PaintRegionMap& last_frame_paint_region_map)
-    : rects_(std::make_shared<std::vector<SkRect>>()),
+                         const PaintRegionMap& last_frame_paint_region_map,
+                         bool has_raster_cache)
+    : clip_tracker_(DisplayListMatrixClipTracker(kGiantRect, SkMatrix::I())),
+      rects_(std::make_shared<std::vector<SkRect>>()),
       frame_size_(frame_size),
-      frame_device_pixel_ratio_(frame_device_pixel_ratio),
       this_frame_paint_region_map_(this_frame_paint_region_map),
-      last_frame_paint_region_map_(last_frame_paint_region_map) {}
+      last_frame_paint_region_map_(last_frame_paint_region_map),
+      has_raster_cache_(has_raster_cache) {}
 
 void DiffContext::BeginSubtree() {
   state_stack_.push_back(state_);
-  state_.rect_index_ = rects_->size();
+
+  bool had_integral_transform = state_.integral_transform;
+  state_.rect_index = rects_->size();
+  state_.has_filter_bounds_adjustment = false;
+  state_.has_texture = false;
+  state_.integral_transform = false;
+
+  state_.clip_tracker_save_count = clip_tracker_.getSaveCount();
+  clip_tracker_.save();
+
+  if (had_integral_transform) {
+    MakeCurrentTransformIntegral();
+  }
 }
 
 void DiffContext::EndSubtree() {
   FML_DCHECK(!state_stack_.empty());
-  state_ = std::move(state_stack_.back());
+  if (state_.has_filter_bounds_adjustment) {
+    filter_bounds_adjustment_stack_.pop_back();
+  }
+  clip_tracker_.restoreToCount(state_.clip_tracker_save_count);
+  state_ = state_stack_.back();
   state_stack_.pop_back();
 }
 
 DiffContext::State::State()
-    : dirty(false), cull_rect(kGiantRect), rect_index_(0) {}
+    : dirty(false),
+      rect_index(0),
+      integral_transform(false),
+      clip_tracker_save_count(0),
+      has_filter_bounds_adjustment(false),
+      has_texture(false) {}
 
 void DiffContext::PushTransform(const SkMatrix& transform) {
-  state_.transform.preConcat(transform);
-  SkMatrix inverse_transform;
-  // Perspective projections don't produce rectangles that are useful for
-  // culling for some reason.
-  if (!transform.hasPerspective() && transform.invert(&inverse_transform)) {
-    inverse_transform.mapRect(&state_.cull_rect);
+  clip_tracker_.transform(transform);
+}
+
+void DiffContext::MakeCurrentTransformIntegral() {
+  // TODO(knopp): This is duplicated from LayerStack. Maybe should be part of
+  // clip tracker?
+  if (clip_tracker_.using_4x4_matrix()) {
+    clip_tracker_.setTransform(
+        RasterCacheUtil::GetIntegralTransCTM(clip_tracker_.matrix_4x4()));
   } else {
-    state_.cull_rect = kGiantRect;
+    clip_tracker_.setTransform(
+        RasterCacheUtil::GetIntegralTransCTM(clip_tracker_.matrix_3x3()));
   }
 }
 
-Damage DiffContext::ComputeDamage(
-    const SkIRect& accumulated_buffer_damage) const {
+void DiffContext::PushFilterBoundsAdjustment(
+    const FilterBoundsAdjustment& filter) {
+  FML_DCHECK(state_.has_filter_bounds_adjustment == false);
+  state_.has_filter_bounds_adjustment = true;
+  filter_bounds_adjustment_stack_.push_back(filter);
+}
+
+SkRect DiffContext::ApplyFilterBoundsAdjustment(SkRect rect) const {
+  // Apply filter bounds adjustment in reverse order
+  for (auto i = filter_bounds_adjustment_stack_.rbegin();
+       i != filter_bounds_adjustment_stack_.rend(); ++i) {
+    rect = (*i)(rect);
+  }
+  return rect;
+}
+
+void DiffContext::AlignRect(SkIRect& rect,
+                            int horizontal_alignment,
+                            int vertical_alignment) const {
+  auto top = rect.top();
+  auto left = rect.left();
+  auto right = rect.right();
+  auto bottom = rect.bottom();
+  if (top % vertical_alignment != 0) {
+    top -= top % vertical_alignment;
+  }
+  if (left % horizontal_alignment != 0) {
+    left -= left % horizontal_alignment;
+  }
+  if (right % horizontal_alignment != 0) {
+    right += horizontal_alignment - right % horizontal_alignment;
+  }
+  if (bottom % vertical_alignment != 0) {
+    bottom += vertical_alignment - bottom % vertical_alignment;
+  }
+  right = std::min(right, frame_size_.width());
+  bottom = std::min(bottom, frame_size_.height());
+  rect = SkIRect::MakeLTRB(left, top, right, bottom);
+}
+
+Damage DiffContext::ComputeDamage(const SkIRect& accumulated_buffer_damage,
+                                  int horizontal_clip_alignment,
+                                  int vertical_clip_alignment) const {
   SkRect buffer_damage = SkRect::Make(accumulated_buffer_damage);
   buffer_damage.join(damage_);
   SkRect frame_damage(damage_);
@@ -64,11 +133,33 @@ Damage DiffContext::ComputeDamage(
   SkIRect frame_clip = SkIRect::MakeSize(frame_size_);
   res.buffer_damage.intersect(frame_clip);
   res.frame_damage.intersect(frame_clip);
+
+  if (horizontal_clip_alignment > 1 || vertical_clip_alignment > 1) {
+    AlignRect(res.buffer_damage, horizontal_clip_alignment,
+              vertical_clip_alignment);
+    AlignRect(res.frame_damage, horizontal_clip_alignment,
+              vertical_clip_alignment);
+  }
   return res;
 }
 
+SkRect DiffContext::MapRect(const SkRect& rect) {
+  SkRect mapped_rect(rect);
+  clip_tracker_.mapRect(&mapped_rect);
+  return mapped_rect;
+}
+
 bool DiffContext::PushCullRect(const SkRect& clip) {
-  return state_.cull_rect.intersect(clip);
+  clip_tracker_.clipRect(clip, DlCanvas::ClipOp::kIntersect, false);
+  return !clip_tracker_.device_cull_rect().isEmpty();
+}
+
+SkMatrix DiffContext::GetTransform3x3() const {
+  return clip_tracker_.matrix_3x3();
+}
+
+SkRect DiffContext::GetCullRect() const {
+  return clip_tracker_.local_cull_rect();
 }
 
 void DiffContext::MarkSubtreeDirty(const PaintRegion& previous_paint_region) {
@@ -79,17 +170,39 @@ void DiffContext::MarkSubtreeDirty(const PaintRegion& previous_paint_region) {
   state_.dirty = true;
 }
 
+void DiffContext::MarkSubtreeDirty(const SkRect& previous_paint_region) {
+  FML_DCHECK(!IsSubtreeDirty());
+  AddDamage(previous_paint_region);
+  state_.dirty = true;
+}
+
 void DiffContext::AddLayerBounds(const SkRect& rect) {
-  SkRect r(rect);
-  if (r.intersect(state_.cull_rect)) {
-    state_.transform.mapRect(&r);
-    if (!r.isEmpty()) {
-      rects_->push_back(r);
-      if (IsSubtreeDirty()) {
-        AddDamage(r);
-      }
+  // During painting we cull based on non-overriden transform and then
+  // override the transform right before paint. Do the same thing here to get
+  // identical paint rect.
+  auto transformed_rect = ApplyFilterBoundsAdjustment(MapRect(rect));
+  if (transformed_rect.intersects(clip_tracker_.device_cull_rect())) {
+    if (state_.integral_transform) {
+      clip_tracker_.save();
+      MakeCurrentTransformIntegral();
+      transformed_rect = ApplyFilterBoundsAdjustment(MapRect(rect));
+      clip_tracker_.restore();
+    }
+    rects_->push_back(transformed_rect);
+    if (IsSubtreeDirty()) {
+      AddDamage(transformed_rect);
     }
   }
+}
+
+void DiffContext::MarkSubtreeHasTextureLayer() {
+  // Set the has_texture flag on current state and all parent states. That
+  // way we'll know that we can't skip diff for retained layers because
+  // they contain a TextureLayer.
+  for (auto& state : state_stack_) {
+    state.has_texture = true;
+  }
+  state_.has_texture = true;
 }
 
 void DiffContext::AddExistingPaintRegion(const PaintRegion& region) {
@@ -107,14 +220,15 @@ void DiffContext::AddReadbackRegion(const SkIRect& rect) {
   readback.position = rects_->size();
   // Push empty rect as a placeholder for position in current subtree
   rects_->push_back(SkRect::MakeEmpty());
-  readbacks_.push_back(std::move(readback));
+  readbacks_.push_back(readback);
 }
 
 PaintRegion DiffContext::CurrentSubtreeRegion() const {
   bool has_readback = std::any_of(
       readbacks_.begin(), readbacks_.end(),
-      [&](const Readback& r) { return r.position >= state_.rect_index_; });
-  return PaintRegion(rects_, state_.rect_index_, rects_->size(), has_readback);
+      [&](const Readback& r) { return r.position >= state_.rect_index; });
+  return PaintRegion(rects_, state_.rect_index, rects_->size(), has_readback,
+                     state_.has_texture);
 }
 
 void DiffContext::AddDamage(const PaintRegion& damage) {
@@ -155,7 +269,5 @@ void DiffContext::Statistics::LogStatistics() {
                     different_instance_but_equal_pictures_);
 #endif  // !FLUTTER_RELEASE
 }
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 }  // namespace flutter

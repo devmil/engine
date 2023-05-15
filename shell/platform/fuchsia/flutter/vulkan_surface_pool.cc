@@ -35,12 +35,21 @@ VulkanSurfacePool::VulkanSurfacePool(vulkan::VulkanProvider& vulkan_provider,
     : vulkan_provider_(vulkan_provider),
       context_(std::move(context)),
       scenic_session_(scenic_session) {
+  FML_CHECK(context_ != nullptr);
+
   zx_status_t status = fdio_service_connect(
       "/svc/fuchsia.sysmem.Allocator",
       sysmem_allocator_.NewRequest().TakeChannel().release());
   sysmem_allocator_->SetDebugClientInfo(GetCurrentProcessName(),
                                         GetCurrentProcessId());
-  FML_DCHECK(status != ZX_OK);
+  FML_DCHECK(status == ZX_OK);
+
+  if (!scenic_session_) {
+    status = fdio_service_connect(
+        "/svc/fuchsia.ui.composition.Allocator",
+        flatland_allocator_.NewRequest().TakeChannel().release());
+    FML_DCHECK(status == ZX_OK);
+  }
 }
 
 VulkanSurfacePool::~VulkanSurfacePool() {}
@@ -50,12 +59,13 @@ std::unique_ptr<VulkanSurface> VulkanSurfacePool::AcquireSurface(
   auto surface = GetCachedOrCreateSurface(size);
 
   if (surface == nullptr) {
-    FML_DLOG(ERROR) << "Could not acquire surface";
+    FML_LOG(ERROR) << "VulkanSurfaceProducer: Could not acquire surface";
     return nullptr;
   }
 
   if (!surface->FlushSessionAcquireAndReleaseEvents()) {
-    FML_DLOG(ERROR) << "Could not flush acquire/release events for buffer.";
+    FML_LOG(ERROR) << "VulkanSurfaceProducer: Could not flush acquire/release "
+                      "events for buffer.";
     return nullptr;
   }
 
@@ -114,9 +124,10 @@ std::unique_ptr<VulkanSurface> VulkanSurfacePool::CreateSurface(
   TRACE_EVENT2("flutter", "VulkanSurfacePool::CreateSurface", "width",
                size.width(), "height", size.height());
   auto surface = std::make_unique<VulkanSurface>(
-      vulkan_provider_, sysmem_allocator_, context_, scenic_session_, size,
-      buffer_id_++);
+      vulkan_provider_, sysmem_allocator_, flatland_allocator_, context_,
+      scenic_session_, size, buffer_id_++);
   if (!surface->IsValid()) {
+    FML_LOG(ERROR) << "VulkanSurfaceProducer: Created surface is invalid";
     return nullptr;
   }
   trace_surfaces_created_++;
@@ -189,7 +200,8 @@ void VulkanSurfacePool::AgeAndCollectOldBuffers() {
     if (new_surface != nullptr) {
       available_surfaces_.push_back(std::move(new_surface));
     } else {
-      FML_DLOG(ERROR) << "Failed to create a new shrunk surface";
+      FML_LOG(ERROR)
+          << "VulkanSurfaceProducer: Failed to create a new shrunk surface";
     }
   }
 
@@ -216,7 +228,8 @@ void VulkanSurfacePool::ShrinkToFit() {
     if (surface != nullptr) {
       available_surfaces_.push_back(std::move(surface));
     } else {
-      FML_DLOG(ERROR) << "Failed to create resized surface";
+      FML_LOG(ERROR)
+          << "VulkanSurfaceProducer: Failed to create resized surface";
     }
   }
 

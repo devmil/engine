@@ -22,10 +22,11 @@ namespace flutter {
 
 namespace {
 class MockDelegate : public Engine::Delegate {
+ public:
   MOCK_METHOD2(OnEngineUpdateSemantics,
                void(SemanticsNodeUpdates, CustomAccessibilityActionUpdates));
   MOCK_METHOD1(OnEngineHandlePlatformMessage,
-               void(fml::RefPtr<PlatformMessage>));
+               void(std::unique_ptr<PlatformMessage>));
   MOCK_METHOD0(OnPreEngineRestart, void());
   MOCK_METHOD0(OnRootIsolateCreated, void());
   MOCK_METHOD2(UpdateIsolateDescription, void(const std::string, int64_t));
@@ -34,6 +35,9 @@ class MockDelegate : public Engine::Delegate {
                std::unique_ptr<std::vector<std::string>>(
                    const std::vector<std::string>&));
   MOCK_METHOD1(RequestDartDeferredLibrary, void(intptr_t));
+  MOCK_METHOD0(GetCurrentTimePoint, fml::TimePoint());
+  MOCK_CONST_METHOD0(GetPlatformMessageHandler,
+                     const std::shared_ptr<PlatformMessageHandler>&());
 };
 
 class MockResponse : public PlatformMessageResponse {
@@ -44,13 +48,15 @@ class MockResponse : public PlatformMessageResponse {
 
 class MockRuntimeDelegate : public RuntimeDelegate {
  public:
+  MOCK_METHOD0(ImplicitViewEnabled, bool());
   MOCK_METHOD0(DefaultRouteName, std::string());
   MOCK_METHOD1(ScheduleFrame, void(bool));
-  MOCK_METHOD1(Render, void(std::unique_ptr<flutter::LayerTree>));
+  MOCK_METHOD2(Render, void(std::unique_ptr<flutter::LayerTree>, float));
   MOCK_METHOD2(UpdateSemantics,
                void(SemanticsNodeUpdates, CustomAccessibilityActionUpdates));
-  MOCK_METHOD1(HandlePlatformMessage, void(fml::RefPtr<PlatformMessage>));
+  MOCK_METHOD1(HandlePlatformMessage, void(std::unique_ptr<PlatformMessage>));
   MOCK_METHOD0(GetFontCollection, FontCollection&());
+  MOCK_METHOD0(GetAssetManager, std::shared_ptr<AssetManager>());
   MOCK_METHOD0(OnRootIsolateCreated, void());
   MOCK_METHOD2(UpdateIsolateDescription, void(const std::string, int64_t));
   MOCK_METHOD1(SetNeedsReportTimings, void(bool));
@@ -58,23 +64,27 @@ class MockRuntimeDelegate : public RuntimeDelegate {
                std::unique_ptr<std::vector<std::string>>(
                    const std::vector<std::string>&));
   MOCK_METHOD1(RequestDartDeferredLibrary, void(intptr_t));
+  MOCK_CONST_METHOD0(GetPlatformMessageHandler,
+                     std::weak_ptr<PlatformMessageHandler>());
 };
 
 class MockRuntimeController : public RuntimeController {
  public:
-  MockRuntimeController(RuntimeDelegate& client, TaskRunners p_task_runners)
+  MockRuntimeController(RuntimeDelegate& client,
+                        const TaskRunners& p_task_runners)
       : RuntimeController(client, p_task_runners) {}
   MOCK_METHOD0(IsRootIsolateRunning, bool());
-  MOCK_METHOD1(DispatchPlatformMessage, bool(fml::RefPtr<PlatformMessage>));
+  MOCK_METHOD1(DispatchPlatformMessage, bool(std::unique_ptr<PlatformMessage>));
   MOCK_METHOD3(LoadDartDeferredLibraryError,
                void(intptr_t, const std::string, bool));
   MOCK_CONST_METHOD0(GetDartVM, DartVM*());
+  MOCK_METHOD1(NotifyIdle, bool(fml::TimeDelta));
 };
 
-fml::RefPtr<PlatformMessage> MakePlatformMessage(
+std::unique_ptr<PlatformMessage> MakePlatformMessage(
     const std::string& channel,
     const std::map<std::string, std::string>& values,
-    fml::RefPtr<PlatformMessageResponse> response) {
+    const fml::RefPtr<PlatformMessageResponse>& response) {
   rapidjson::Document document;
   auto& allocator = document.GetAllocator();
   document.SetObject();
@@ -92,8 +102,8 @@ fml::RefPtr<PlatformMessage> MakePlatformMessage(
   document.Accept(writer);
   const uint8_t* data = reinterpret_cast<const uint8_t*>(buffer.GetString());
 
-  fml::RefPtr<PlatformMessage> message = fml::MakeRefCounted<PlatformMessage>(
-      channel, std::vector<uint8_t>(data, data + buffer.GetSize()), response);
+  std::unique_ptr<PlatformMessage> message = std::make_unique<PlatformMessage>(
+      channel, fml::MallocMapping::Copy(data, buffer.GetSize()), response);
   return message;
 }
 
@@ -137,6 +147,7 @@ class EngineTest : public testing::FixtureTest {
   fml::WeakPtr<IOManager> io_manager_;
   std::unique_ptr<RuntimeController> runtime_controller_;
   std::shared_ptr<fml::ConcurrentTaskRunner> image_decoder_task_runner_;
+  fml::TaskRunnerAffineWeakPtr<SnapshotDelegate> snapshot_delegate_;
 };
 }  // namespace
 
@@ -176,9 +187,9 @@ TEST_F(EngineTest, DispatchPlatformMessageUnknown) {
 
     fml::RefPtr<PlatformMessageResponse> response =
         fml::MakeRefCounted<MockResponse>();
-    fml::RefPtr<PlatformMessage> message =
-        fml::MakeRefCounted<PlatformMessage>("foo", response);
-    engine->DispatchPlatformMessage(message);
+    std::unique_ptr<PlatformMessage> message =
+        std::make_unique<PlatformMessage>("foo", response);
+    engine->DispatchPlatformMessage(std::move(message));
   });
 }
 
@@ -206,9 +217,9 @@ TEST_F(EngineTest, DispatchPlatformMessageInitialRoute) {
         {"method", "setInitialRoute"},
         {"args", "test_initial_route"},
     };
-    fml::RefPtr<PlatformMessage> message =
+    std::unique_ptr<PlatformMessage> message =
         MakePlatformMessage("flutter/navigation", values, response);
-    engine->DispatchPlatformMessage(message);
+    engine->DispatchPlatformMessage(std::move(message));
     EXPECT_EQ(engine->InitialRoute(), "test_initial_route");
   });
 }
@@ -239,9 +250,9 @@ TEST_F(EngineTest, DispatchPlatformMessageInitialRouteIgnored) {
         {"method", "setInitialRoute"},
         {"args", "test_initial_route"},
     };
-    fml::RefPtr<PlatformMessage> message =
+    std::unique_ptr<PlatformMessage> message =
         MakePlatformMessage("flutter/navigation", values, response);
-    engine->DispatchPlatformMessage(message);
+    engine->DispatchPlatformMessage(std::move(message));
     EXPECT_EQ(engine->InitialRoute(), "");
   });
 }
@@ -265,10 +276,111 @@ TEST_F(EngineTest, SpawnSharesFontLibrary) {
         /*font_collection=*/std::make_shared<FontCollection>(),
         /*runtime_controller=*/std::move(mock_runtime_controller));
 
-    auto spawn =
-        engine->Spawn(delegate_, dispatcher_maker_, settings_, nullptr);
+    auto spawn = engine->Spawn(delegate_, dispatcher_maker_, settings_, nullptr,
+                               std::string(), io_manager_, snapshot_delegate_);
     EXPECT_TRUE(spawn != nullptr);
     EXPECT_EQ(&engine->GetFontCollection(), &spawn->GetFontCollection());
+  });
+}
+
+TEST_F(EngineTest, SpawnWithCustomInitialRoute) {
+  PostUITaskSync([this] {
+    MockRuntimeDelegate client;
+    auto mock_runtime_controller =
+        std::make_unique<MockRuntimeController>(client, task_runners_);
+    auto vm_ref = DartVMRef::Create(settings_);
+    EXPECT_CALL(*mock_runtime_controller, GetDartVM())
+        .WillRepeatedly(::testing::Return(vm_ref.get()));
+    auto engine = std::make_unique<Engine>(
+        /*delegate=*/delegate_,
+        /*dispatcher_maker=*/dispatcher_maker_,
+        /*image_decoder_task_runner=*/image_decoder_task_runner_,
+        /*task_runners=*/task_runners_,
+        /*settings=*/settings_,
+        /*animator=*/std::move(animator_),
+        /*io_manager=*/io_manager_,
+        /*font_collection=*/std::make_shared<FontCollection>(),
+        /*runtime_controller=*/std::move(mock_runtime_controller));
+
+    auto spawn = engine->Spawn(delegate_, dispatcher_maker_, settings_, nullptr,
+                               "/foo", io_manager_, snapshot_delegate_);
+    EXPECT_TRUE(spawn != nullptr);
+    ASSERT_EQ("/foo", spawn->InitialRoute());
+  });
+}
+
+TEST_F(EngineTest, SpawnResetsViewportMetrics) {
+  PostUITaskSync([this] {
+    MockRuntimeDelegate client;
+    auto mock_runtime_controller =
+        std::make_unique<MockRuntimeController>(client, task_runners_);
+    auto vm_ref = DartVMRef::Create(settings_);
+    EXPECT_CALL(*mock_runtime_controller, GetDartVM())
+        .WillRepeatedly(::testing::Return(vm_ref.get()));
+    ViewportMetrics old_viewport_metrics = ViewportMetrics();
+    const double kViewWidth = 768;
+    const double kViewHeight = 1024;
+    old_viewport_metrics.physical_width = kViewWidth;
+    old_viewport_metrics.physical_height = kViewHeight;
+    mock_runtime_controller->SetViewportMetrics(old_viewport_metrics);
+    auto engine = std::make_unique<Engine>(
+        /*delegate=*/delegate_,
+        /*dispatcher_maker=*/dispatcher_maker_,
+        /*image_decoder_task_runner=*/image_decoder_task_runner_,
+        /*task_runners=*/task_runners_,
+        /*settings=*/settings_,
+        /*animator=*/std::move(animator_),
+        /*io_manager=*/io_manager_,
+        /*font_collection=*/std::make_shared<FontCollection>(),
+        /*runtime_controller=*/std::move(mock_runtime_controller));
+
+    auto& old_platform_data = engine->GetRuntimeController()->GetPlatformData();
+    EXPECT_EQ(old_platform_data.viewport_metrics.physical_width, kViewWidth);
+    EXPECT_EQ(old_platform_data.viewport_metrics.physical_height, kViewHeight);
+
+    auto spawn = engine->Spawn(delegate_, dispatcher_maker_, settings_, nullptr,
+                               std::string(), io_manager_, snapshot_delegate_);
+    EXPECT_TRUE(spawn != nullptr);
+    auto& new_viewport_metrics =
+        spawn->GetRuntimeController()->GetPlatformData().viewport_metrics;
+    EXPECT_EQ(new_viewport_metrics.physical_width, 0);
+    EXPECT_EQ(new_viewport_metrics.physical_height, 0);
+  });
+}
+
+TEST_F(EngineTest, SpawnWithCustomSettings) {
+  PostUITaskSync([this] {
+    MockRuntimeDelegate client;
+    auto mock_runtime_controller =
+        std::make_unique<MockRuntimeController>(client, task_runners_);
+    auto vm_ref = DartVMRef::Create(settings_);
+    EXPECT_CALL(*mock_runtime_controller, GetDartVM())
+        .WillRepeatedly(::testing::Return(vm_ref.get()));
+    auto engine = std::make_unique<Engine>(
+        /*delegate=*/delegate_,
+        /*dispatcher_maker=*/dispatcher_maker_,
+        /*image_decoder_task_runner=*/image_decoder_task_runner_,
+        /*task_runners=*/task_runners_,
+        /*settings=*/settings_,
+        /*animator=*/std::move(animator_),
+        /*io_manager=*/io_manager_,
+        /*font_collection=*/std::make_shared<FontCollection>(),
+        /*runtime_controller=*/std::move(mock_runtime_controller));
+
+    Settings custom_settings = settings_;
+    custom_settings.persistent_isolate_data =
+        std::make_shared<fml::DataMapping>("foo");
+    auto spawn =
+        engine->Spawn(delegate_, dispatcher_maker_, custom_settings, nullptr,
+                      std::string(), io_manager_, snapshot_delegate_);
+    EXPECT_TRUE(spawn != nullptr);
+    auto new_persistent_isolate_data =
+        const_cast<RuntimeController*>(spawn->GetRuntimeController())
+            ->GetPersistentIsolateData();
+    EXPECT_EQ(custom_settings.persistent_isolate_data->GetMapping(),
+              new_persistent_isolate_data->GetMapping());
+    EXPECT_EQ(custom_settings.persistent_isolate_data->GetSize(),
+              new_persistent_isolate_data->GetSize());
   });
 }
 

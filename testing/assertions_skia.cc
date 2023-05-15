@@ -15,33 +15,9 @@ std::ostream& operator<<(std::ostream& os, const SkClipOp& o) {
     case SkClipOp::kIntersect:
       os << "ClipOpIntersect";
       break;
-#ifdef SK_SUPPORT_DEPRECATED_CLIPOPS
-    case SkClipOp::kUnion_deprecated:
-      os << "ClipOpUnion_deprecated";
+    default:
+      os << "ClipOpUnknown" << static_cast<int>(o);
       break;
-    case SkClipOp::kXOR_deprecated:
-      os << "ClipOpXOR_deprecated";
-      break;
-    case SkClipOp::kReverseDifference_deprecated:
-      os << "ClipOpReverseDifference_deprecated";
-      break;
-    case SkClipOp::kReplace_deprecated:
-      os << "ClipOpReplace_deprectaed";
-      break;
-#else
-    case SkClipOp::kExtraEnumNeedInternallyPleaseIgnoreWillGoAway2:
-      os << "ClipOpReserved2";
-      break;
-    case SkClipOp::kExtraEnumNeedInternallyPleaseIgnoreWillGoAway3:
-      os << "ClipOpReserved3";
-      break;
-    case SkClipOp::kExtraEnumNeedInternallyPleaseIgnoreWillGoAway4:
-      os << "ClipOpReserved4";
-      break;
-    case SkClipOp::kExtraEnumNeedInternallyPleaseIgnoreWillGoAway5:
-      os << "ClipOpReserved5";
-      break;
-#endif
   }
   return os;
 }
@@ -75,6 +51,11 @@ std::ostream& operator<<(std::ostream& os, const SkM44& m) {
 
 std::ostream& operator<<(std::ostream& os, const SkVector3& v) {
   return os << v.x() << ", " << v.y() << ", " << v.z();
+}
+
+std::ostream& operator<<(std::ostream& os, const SkIRect& r) {
+  return os << "LTRB: " << r.fLeft << ", " << r.fTop << ", " << r.fRight << ", "
+            << r.fBottom;
 }
 
 std::ostream& operator<<(std::ostream& os, const SkRect& r) {

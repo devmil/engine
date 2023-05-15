@@ -7,12 +7,14 @@
 
 #include "flutter/shell/platform/embedder/tests/embedder_test_context.h"
 
+#include "third_party/skia/include/core/SkSurface.h"
+
 namespace flutter {
 namespace testing {
 
 class EmbedderTestContextSoftware : public EmbedderTestContext {
  public:
-  EmbedderTestContextSoftware(std::string assets_path = "");
+  explicit EmbedderTestContextSoftware(std::string assets_path = "");
 
   ~EmbedderTestContextSoftware() override;
 
@@ -21,7 +23,7 @@ class EmbedderTestContextSoftware : public EmbedderTestContext {
   // |EmbedderTestContext|
   EmbedderTestContextType GetContextType() const override;
 
-  bool Present(sk_sp<SkImage> image);
+  bool Present(const sk_sp<SkImage>& image);
 
  protected:
   virtual void SetupCompositor() override;

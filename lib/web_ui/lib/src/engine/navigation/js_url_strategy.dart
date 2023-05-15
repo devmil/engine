@@ -2,21 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+@JS()
+library js_url_strategy;
+
+import 'dart:js_interop';
+
+import 'package:ui/ui.dart' as ui;
+
+import '../dom.dart';
 
 typedef _PathGetter = String Function();
 
 typedef _StateGetter = Object? Function();
 
-typedef _AddPopStateListener = ui.VoidCallback Function(html.EventListener);
+typedef _AddPopStateListener = ui.VoidCallback Function(DartDomEventListener);
 
 typedef _StringToString = String Function(String);
 
 typedef _StateOperation = void Function(
     Object? state, String title, String url);
 
-typedef _HistoryMove = Future<void> Function(int count);
+typedef _HistoryMove = Future<void> Function(double count);
 
 /// The JavaScript representation of a URL strategy.
 ///
@@ -24,6 +30,7 @@ typedef _HistoryMove = Future<void> Function(int count);
 /// bridge from the app to the engine.
 @JS()
 @anonymous
+@staticInterop
 abstract class JsUrlStrategy {
   /// Creates an instance of [JsUrlStrategy] from a bag of URL strategy
   /// functions.
@@ -36,10 +43,12 @@ abstract class JsUrlStrategy {
     required _StateOperation replaceState,
     required _HistoryMove go,
   });
+}
 
+extension JsUrlStrategyExtension on JsUrlStrategy {
   /// Adds a listener to the `popstate` event and returns a function that, when
   /// invoked, removes the listener.
-  external ui.VoidCallback addPopStateListener(html.EventListener fn);
+  external ui.VoidCallback addPopStateListener(DartDomEventListener fn);
 
   /// Returns the active path in the browser.
   external String getPath();
@@ -74,5 +83,5 @@ abstract class JsUrlStrategy {
   /// * `go(3)` moves forward 3 steps in hisotry.
   ///
   /// See: https://developer.mozilla.org/en-US/docs/Web/API/History/go
-  external Future<void> go(int count);
+  external Future<void> go(double count);
 }

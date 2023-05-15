@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.6
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:collection/collection.dart' show MapEquality;
 
 // This script verifies that the release binaries only export the expected
 // symbols.
@@ -22,11 +20,25 @@ import 'package:collection/collection.dart' show MapEquality;
 /// Takes the path to the out directory as the first argument, and the path to
 /// the buildtools directory as the second argument.
 ///
-/// If the second argument is not specified, it is assumed that it is the parent
-/// of the out directory (for backwards compatibility).
+/// If the second argument is not specified, for backwards compatibility, it is
+/// assumed that it is ../buildtools relative to the first parameter (the out
+/// directory).
 void main(List<String> arguments) {
-  assert(arguments.length == 2 || arguments.length == 1);
-  final String outPath = arguments.first;
+  if (arguments.isEmpty || arguments.length > 2) {
+    print('usage: dart verify_exported.dart OUT_DIR [BUILDTOOLS]');
+    exit(1);
+  }
+  String outPath = arguments.first;
+  if (p.isRelative(outPath)) {
+    /// If path is relative then create a full path starting from the engine checkout
+    /// repository.
+    if (!Platform.environment.containsKey('ENGINE_CHECKOUT_PATH')) {
+      print('ENGINE_CHECKOUT_PATH env variable is mandatory when using relative destination path');
+      exit(1);
+    }
+    final String engineCheckoutPath = Platform.environment['ENGINE_CHECKOUT_PATH']!;
+    outPath = p.join(engineCheckoutPath, outPath);
+  }
   final String buildToolsPath = arguments.length == 1
       ? p.join(p.dirname(outPath), 'buildtools')
       : arguments[1];
@@ -40,10 +52,13 @@ void main(List<String> arguments) {
     throw UnimplementedError('Script only support running on Linux or MacOS.');
   }
   final String nmPath = p.join(buildToolsPath, platform, 'clang', 'bin', 'llvm-nm');
-  assert(Directory(outPath).existsSync());
+  if (!Directory(outPath).existsSync()) {
+    print('error: build out directory not found: $outPath');
+    exit(1);
+  }
 
   final Iterable<String> releaseBuilds = Directory(outPath).listSync()
-      .where((FileSystemEntity entity) => entity is Directory)
+      .whereType<Directory>()
       .map<String>((FileSystemEntity dir) => p.basename(dir.path))
       .where((String s) => s.contains('_release'));
 
@@ -51,17 +66,22 @@ void main(List<String> arguments) {
       .where((String s) => s.startsWith('ios_'));
   final Iterable<String> androidReleaseBuilds = releaseBuilds
       .where((String s) => s.startsWith('android_'));
+  final Iterable<String> hostReleaseBuilds = releaseBuilds
+      .where((String s) => s.startsWith('host_'));
 
   int failures = 0;
   failures += _checkIos(outPath, nmPath, iosReleaseBuilds);
   failures += _checkAndroid(outPath, nmPath, androidReleaseBuilds);
+  if (Platform.isLinux) {
+    failures += _checkLinux(outPath, nmPath, hostReleaseBuilds);
+  }
   print('Failing checks: $failures');
   exit(failures);
 }
 
 int _checkIos(String outPath, String nmPath, Iterable<String> builds) {
   int failures = 0;
-  for (String build in builds) {
+  for (final String build in builds) {
     final String libFlutter = p.join(outPath, build, 'Flutter.framework', 'Flutter');
     if (!File(libFlutter).existsSync()) {
       print('SKIPPING: $libFlutter does not exist.');
@@ -73,10 +93,10 @@ int _checkIos(String outPath, String nmPath, Iterable<String> builds) {
       failures++;
       continue;
     }
-    final Iterable<NmEntry> unexpectedEntries = NmEntry.parse(nmResult.stdout).where((NmEntry entry) {
+    final Iterable<NmEntry> unexpectedEntries = NmEntry.parse(nmResult.stdout as String).where((NmEntry entry) {
       return !(((entry.type == '(__DATA,__common)' || entry.type == '(__DATA,__const)') && entry.name.startsWith('_Flutter'))
           || (entry.type == '(__DATA,__objc_data)'
-              && (entry.name.startsWith('_OBJC_METACLASS_\$_Flutter') || entry.name.startsWith('_OBJC_CLASS_\$_Flutter'))));
+              && (entry.name.startsWith(r'_OBJC_METACLASS_$_Flutter') || entry.name.startsWith(r'_OBJC_CLASS_$_Flutter'))));
     });
     if (unexpectedEntries.isNotEmpty) {
       print('ERROR: $libFlutter exports unexpected symbols:');
@@ -93,7 +113,7 @@ int _checkIos(String outPath, String nmPath, Iterable<String> builds) {
 
 int _checkAndroid(String outPath, String nmPath, Iterable<String> builds) {
   int failures = 0;
-  for (String build in builds) {
+  for (final String build in builds) {
     final String libFlutter = p.join(outPath, build, 'libflutter.so');
     if (!File(libFlutter).existsSync()) {
       print('SKIPPING: $libFlutter does not exist.');
@@ -105,17 +125,17 @@ int _checkAndroid(String outPath, String nmPath, Iterable<String> builds) {
       failures++;
       continue;
     }
-    final Iterable<NmEntry> entries = NmEntry.parse(nmResult.stdout);
-    final Map<String, String> entryMap = Map<String, String>.fromIterable(
-        entries,
-        key: (dynamic entry) => entry.name,
-        value: (dynamic entry) => entry.type);
+    final Iterable<NmEntry> entries = NmEntry.parse(nmResult.stdout as String);
+    final Map<String, String> entryMap = <String, String>{
+      for (final NmEntry entry in entries)
+        entry.name: entry.type,
+    };
     final Map<String, String> expectedSymbols = <String, String>{
       'JNI_OnLoad': 'T',
       '_binary_icudtl_dat_size': 'A',
       '_binary_icudtl_dat_start': 'D',
-      // TODO(fxb/47943): Remove these once Clang lld does not expose them.
-      // arm
+      // TODO(dnfield): Remove these once Clang lld does not expose them.
+      // arm https://bugs.fuchsia.dev/p/fuchsia/issues/detail?id=47943
       '__adddf3': 'T',
       '__addsf3': 'T',
       '__aeabi_cdcmpeq': 'T',
@@ -216,7 +236,7 @@ int _checkAndroid(String outPath, String nmPath, Iterable<String> builds) {
     final Map<String, String> badSymbols = <String, String>{};
     for (final String key in entryMap.keys) {
       if (entryMap[key] != expectedSymbols[key]) {
-        badSymbols[key] = entryMap[key];
+        badSymbols[key] = entryMap[key]!;
       }
     }
     if (badSymbols.isNotEmpty) {
@@ -226,6 +246,41 @@ int _checkAndroid(String outPath, String nmPath, Iterable<String> builds) {
       failures++;
     } else {
       print('OK: $libFlutter');
+    }
+  }
+  return failures;
+}
+
+int _checkLinux(String outPath, String nmPath, Iterable<String> builds) {
+  int failures = 0;
+  for (final String build in builds) {
+    final String libFlutter = p.join(outPath, build, 'libflutter_engine.so');
+    if (!File(libFlutter).existsSync()) {
+      print('SKIPPING: $libFlutter does not exist.');
+      continue;
+    }
+    final ProcessResult nmResult = Process.runSync(nmPath, <String>['-gUD', libFlutter]);
+    if (nmResult.exitCode != 0) {
+      print('ERROR: failed to execute "nm -gUD $libFlutter":\n${nmResult.stderr}');
+      failures++;
+      continue;
+    }
+    final List<NmEntry> entries = NmEntry.parse(nmResult.stdout as String).toList();
+    for (final NmEntry entry in entries) {
+      if (entry.type != 'T' && entry.type != 'R') {
+        print('ERROR: $libFlutter exports an unexpected symbol type: ($entry)');
+        print(' Library has $entries.');
+        failures++;
+        break;
+      }
+      if (!(entry.name.startsWith('Flutter')
+            || entry.name.startsWith('__Flutter')
+            || entry.name.startsWith('kFlutter'))) {
+        print('ERROR: $libFlutter exports an unexpected symbol name: ($entry)');
+        print(' Library has $entries.');
+        failures++;
+        break;
+      }
     }
   }
   return failures;
@@ -244,4 +299,7 @@ class NmEntry {
       return NmEntry._(parts[0], parts[1], parts.last);
     });
   }
+
+  @override
+  String toString() => '$name: $type';
 }

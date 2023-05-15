@@ -26,8 +26,6 @@ TransformLayer::TransformLayer(const SkMatrix& transform)
   }
 }
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 void TransformLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const TransformLayer*>(old_layer);
@@ -42,56 +40,22 @@ void TransformLayer::Diff(DiffContext* context, const Layer* old_layer) {
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
 
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
-
-void TransformLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
-  TRACE_EVENT0("flutter", "TransformLayer::Preroll");
-
-  SkMatrix child_matrix;
-  child_matrix.setConcat(matrix, transform_);
-  context->mutators_stack.PushTransform(transform_);
-  SkRect previous_cull_rect = context->cull_rect;
-  SkMatrix inverse_transform_;
-  // Perspective projections don't produce rectangles that are useful for
-  // culling for some reason.
-  if (!transform_.hasPerspective() && transform_.invert(&inverse_transform_)) {
-    inverse_transform_.mapRect(&context->cull_rect);
-  } else {
-    context->cull_rect = kGiantRect;
-  }
+void TransformLayer::Preroll(PrerollContext* context) {
+  auto mutator = context->state_stack.save();
+  mutator.transform(transform_);
 
   SkRect child_paint_bounds = SkRect::MakeEmpty();
-  PrerollChildren(context, child_matrix, &child_paint_bounds);
+  PrerollChildren(context, &child_paint_bounds);
 
   transform_.mapRect(&child_paint_bounds);
   set_paint_bounds(child_paint_bounds);
-
-  context->cull_rect = previous_cull_rect;
-  context->mutators_stack.Pop();
 }
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-
-void TransformLayer::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  TRACE_EVENT0("flutter", "TransformLayer::UpdateScene");
-  FML_DCHECK(needs_system_composite());
-
-  std::optional<SceneUpdateContext::Transform> transform;
-  if (!transform_.isIdentity()) {
-    transform.emplace(context, transform_);
-  }
-
-  UpdateSceneChildren(context);
-}
-
-#endif
 
 void TransformLayer::Paint(PaintContext& context) const {
-  TRACE_EVENT0("flutter", "TransformLayer::Paint");
   FML_DCHECK(needs_painting(context));
 
-  SkAutoCanvasRestore save(context.internal_nodes_canvas, true);
-  context.internal_nodes_canvas->concat(transform_);
+  auto mutator = context.state_stack.save();
+  mutator.transform(transform_);
 
   PaintChildren(context);
 }

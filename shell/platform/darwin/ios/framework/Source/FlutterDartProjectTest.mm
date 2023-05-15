@@ -29,6 +29,16 @@ FLUTTER_ASSERT_ARC
   XCTAssertEqual(project.settings.old_gen_heap_size, old_gen_heap_size);
 }
 
+- (void)testResourceCacheMaxBytesThresholdSetting {
+  FlutterDartProject* project = [[FlutterDartProject alloc] init];
+  CGFloat scale = [UIScreen mainScreen].scale;
+  CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width * scale;
+  CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height * scale;
+  size_t resource_cache_max_bytes_threshold = screenWidth * screenHeight * 12 * 4;
+  XCTAssertEqual(project.settings.resource_cache_max_bytes_threshold,
+                 resource_cache_max_bytes_threshold);
+}
+
 - (void)testMainBundleSettingsAreCorrectlyParsed {
   NSBundle* mainBundle = [NSBundle mainBundle];
   NSDictionary* appTransportSecurity =
@@ -37,6 +47,124 @@ FLUTTER_ASSERT_ARC
   XCTAssertEqualObjects(
       @"[[\"invalid-site.com\",true,false],[\"sub.invalid-site.com\",false,false]]",
       [FlutterDartProject domainNetworkPolicy:appTransportSecurity]);
+}
+
+- (void)testLeakDartVMSettingsAreCorrectlyParsed {
+  // The FLTLeakDartVM's value is defined in Info.plist
+  NSBundle* mainBundle = [NSBundle mainBundle];
+  NSNumber* leakDartVM = [mainBundle objectForInfoDictionaryKey:@"FLTLeakDartVM"];
+  XCTAssertEqual(leakDartVM.boolValue, NO);
+
+  auto settings = FLTDefaultSettingsForBundle();
+  // Check settings.leak_vm value is same as the value defined in Info.plist.
+  XCTAssertEqual(settings.leak_vm, NO);
+}
+
+- (void)testFLTFrameworkBundleInternalWhenBundleIsNotPresent {
+  NSBundle* found =
+      FLTFrameworkBundleInternal(@"doesNotExist", NSBundle.mainBundle.privateFrameworksURL);
+  XCTAssertNil(found);
+}
+
+- (void)testFLTFrameworkBundleInternalWhenBundleIsPresent {
+  NSString* presentBundleID = @"io.flutter.flutter";
+  NSBundle* found =
+      FLTFrameworkBundleInternal(presentBundleID, NSBundle.mainBundle.privateFrameworksURL);
+  XCTAssertNotNil(found);
+}
+
+- (void)testDisableImpellerSettingIsCorrectlyParsed {
+  id mockMainBundle = OCMPartialMock([NSBundle mainBundle]);
+  OCMStub([mockMainBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"NO");
+
+  auto settings = FLTDefaultSettingsForBundle();
+  // Check settings.enable_impeller value is same as the value defined in Info.plist.
+  XCTAssertEqual(settings.enable_impeller, NO);
+  [mockMainBundle stopMocking];
+}
+
+- (void)testEnableImpellerSettingIsCorrectlyParsed {
+  id mockMainBundle = OCMPartialMock([NSBundle mainBundle]);
+  OCMStub([mockMainBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"YES");
+
+  auto settings = FLTDefaultSettingsForBundle();
+  // Check settings.enable_impeller value is same as the value defined in Info.plist.
+  XCTAssertEqual(settings.enable_impeller, YES);
+  [mockMainBundle stopMocking];
+}
+
+- (void)testEnableImpellerSettingIsCorrectlyOverriddenByCommandLine {
+  id mockMainBundle = OCMPartialMock([NSBundle mainBundle]);
+  OCMStub([mockMainBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"NO");
+  id mockProcessInfo = OCMPartialMock([NSProcessInfo processInfo]);
+  NSArray* arguments = @[ @"process_name", @"--enable-impeller" ];
+  OCMStub([mockProcessInfo arguments]).andReturn(arguments);
+
+  auto settings = FLTDefaultSettingsForBundle(nil, mockProcessInfo);
+  // Check settings.enable_impeller value is same as the value on command line.
+  XCTAssertEqual(settings.enable_impeller, YES);
+  [mockMainBundle stopMocking];
+}
+
+- (void)testDisableImpellerSettingIsCorrectlyOverriddenByCommandLine {
+  id mockMainBundle = OCMPartialMock([NSBundle mainBundle]);
+  OCMStub([mockMainBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"YES");
+  id mockProcessInfo = OCMPartialMock([NSProcessInfo processInfo]);
+  NSArray* arguments = @[ @"process_name", @"--enable-impeller=false" ];
+  OCMStub([mockProcessInfo arguments]).andReturn(arguments);
+
+  auto settings = FLTDefaultSettingsForBundle(nil, mockProcessInfo);
+  // Check settings.enable_impeller value is same as the value on command line.
+  XCTAssertEqual(settings.enable_impeller, NO);
+  [mockMainBundle stopMocking];
+}
+
+- (void)testDisableImpellerAppBundleSettingIsCorrectlyParsed {
+  NSString* bundleId = [FlutterDartProject defaultBundleIdentifier];
+  id mockAppBundle = OCMClassMock([NSBundle class]);
+  OCMStub([mockAppBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"NO");
+  OCMStub([mockAppBundle bundleWithIdentifier:bundleId]).andReturn(mockAppBundle);
+
+  auto settings = FLTDefaultSettingsForBundle();
+  // Check settings.enable_impeller value is same as the value defined in Info.plist.
+  XCTAssertEqual(settings.enable_impeller, NO);
+
+  [mockAppBundle stopMocking];
+}
+
+- (void)testEnableImpellerAppBundleSettingIsCorrectlyParsed {
+  NSString* bundleId = [FlutterDartProject defaultBundleIdentifier];
+  id mockAppBundle = OCMClassMock([NSBundle class]);
+  OCMStub([mockAppBundle objectForInfoDictionaryKey:@"FLTEnableImpeller"]).andReturn(@"YES");
+  OCMStub([mockAppBundle bundleWithIdentifier:bundleId]).andReturn(mockAppBundle);
+
+  // Since FLTEnableImpeller is set to false in the main bundle, this is also
+  // testing that setting FLTEnableImpeller in the app bundle takes
+  // precedence over setting it in the root bundle.
+
+  auto settings = FLTDefaultSettingsForBundle();
+  // Check settings.enable_impeller value is same as the value defined in Info.plist.
+  XCTAssertEqual(settings.enable_impeller, YES);
+
+  [mockAppBundle stopMocking];
+}
+
+- (void)testEnableTraceSystraceSettingIsCorrectlyParsed {
+  NSBundle* mainBundle = [NSBundle mainBundle];
+  NSNumber* enableTraceSystrace = [mainBundle objectForInfoDictionaryKey:@"FLTTraceSystrace"];
+  XCTAssertNotNil(enableTraceSystrace);
+  XCTAssertEqual(enableTraceSystrace.boolValue, NO);
+  auto settings = FLTDefaultSettingsForBundle();
+  XCTAssertEqual(settings.trace_systrace, NO);
+}
+
+- (void)testEnableDartProflingSettingIsCorrectlyParsed {
+  NSBundle* mainBundle = [NSBundle mainBundle];
+  NSNumber* enableTraceSystrace = [mainBundle objectForInfoDictionaryKey:@"FLTEnableDartProfiling"];
+  XCTAssertNotNil(enableTraceSystrace);
+  XCTAssertEqual(enableTraceSystrace.boolValue, NO);
+  auto settings = FLTDefaultSettingsForBundle();
+  XCTAssertEqual(settings.trace_systrace, NO);
 }
 
 - (void)testEmptySettingsAreCorrect {

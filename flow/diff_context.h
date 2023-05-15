@@ -1,17 +1,21 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef FLUTTER_FLOW_DIFF_CONTEXT_H_
 #define FLUTTER_FLOW_DIFF_CONTEXT_H_
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <vector>
+#include "display_list/utils/dl_matrix_clip_tracker.h"
 #include "flutter/flow/paint_region.h"
-#include "flutter/fml/logging.h"
 #include "flutter/fml/macros.h"
 #include "third_party/skia/include/core/SkMatrix.h"
 #include "third_party/skia/include/core/SkRect.h"
 
 namespace flutter {
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
 
 class Layer;
 
@@ -39,9 +43,9 @@ using PaintRegionMap = std::map<uint64_t, PaintRegion>;
 class DiffContext {
  public:
   explicit DiffContext(SkISize frame_size,
-                       double device_pixel_aspect_ratio,
                        PaintRegionMap& this_frame_paint_region_map,
-                       const PaintRegionMap& last_frame_paint_region_map);
+                       const PaintRegionMap& last_frame_paint_region_map,
+                       bool has_raster_cache);
 
   // Starts a new subtree.
   void BeginSubtree();
@@ -70,13 +74,24 @@ class DiffContext {
   // Pushes cull rect for current subtree
   bool PushCullRect(const SkRect& clip);
 
-  // Returns transform matrix for current subtree
-  const SkMatrix& GetTransform() const { return state_.transform; }
+  // Function that adjusts layer bounds (in device coordinates) depending
+  // on filter.
+  using FilterBoundsAdjustment = std::function<SkRect(SkRect)>;
 
-  // Return cull rect for current subtree (in local coordinates)
-  const SkRect& GetCullRect() const { return state_.cull_rect; }
+  // Pushes filter bounds adjustment to current subtree. Every layer in this
+  // subtree will have bounds adjusted by this function.
+  void PushFilterBoundsAdjustment(const FilterBoundsAdjustment& filter);
 
-  // Sets the dirty flag on current subtree;
+  // Instruct DiffContext that current layer will paint with integral transform.
+  void WillPaintWithIntegralTransform() { state_.integral_transform = true; }
+
+  // Returns current transform as SkMatrix.
+  SkMatrix GetTransform3x3() const;
+
+  // Return cull rect for current subtree (in local coordinates).
+  SkRect GetCullRect() const;
+
+  // Sets the dirty flag on current subtree.
   //
   // previous_paint_region, which should represent region of previous subtree
   // at this level will be added to damage area.
@@ -85,8 +100,13 @@ class DiffContext {
   // added to damage.
   void MarkSubtreeDirty(
       const PaintRegion& previous_paint_region = PaintRegion());
+  void MarkSubtreeDirty(const SkRect& previous_paint_region);
 
   bool IsSubtreeDirty() const { return state_.dirty; }
+
+  // Marks that current subtree contains a TextureLayer. This is needed to
+  // ensure that we'll Diff the TextureLayer even if inside retained layer.
+  void MarkSubtreeHasTextureLayer();
 
   // Add layer bounds to current paint region; rect is in "local" (layer)
   // coordinates.
@@ -113,9 +133,12 @@ class DiffContext {
   //
   // additional_damage is the previously accumulated frame_damage for
   // current framebuffer
-  Damage ComputeDamage(const SkIRect& additional_damage) const;
-
-  double frame_device_pixel_ratio() const { return frame_device_pixel_ratio_; };
+  //
+  // clip_alignment controls the alignment of resulting frame and surface
+  // damage.
+  Damage ComputeDamage(const SkIRect& additional_damage,
+                       int horizontal_clip_alignment = 0,
+                       int vertical_clip_alignment = 0) const;
 
   // Adds the region to current damage. Used for removed layers, where instead
   // of diffing the layer its paint region is direcly added to damage.
@@ -130,6 +153,11 @@ class DiffContext {
   // Retrieves the paint region associated with specified layer and previous
   // frame layer tree.
   PaintRegion GetOldLayerPaintRegion(const Layer* layer) const;
+
+  // Whether or not a raster cache is being used. If so, we must snap
+  // all transformations to physical pixels if the layer may be raster
+  // cached.
+  bool has_raster_cache() const { return has_raster_cache_; }
 
   class Statistics {
    public:
@@ -165,28 +193,62 @@ class DiffContext {
 
   Statistics& statistics() { return statistics_; }
 
+  SkRect MapRect(const SkRect& rect);
+
  private:
   struct State {
     State();
 
     bool dirty;
-    SkRect cull_rect;
-    SkMatrix transform;
-    size_t rect_index_;
+
+    size_t rect_index;
+
+    // In order to replicate paint process closely, DiffContext needs to take
+    // into account that some layers are painted with transform translation
+    // snapped to integral coordinates.
+    //
+    // It's not possible to simply snap the transform itself, because culling
+    // needs to happen with original (unsnapped) transform, just like it does
+    // during paint. This means the integral coordinates must be applied after
+    // culling before painting the layer content (either the layer itself, or
+    // when starting subtree to paint layer children).
+    bool integral_transform;
+
+    // Used to restoring clip tracker when popping state.
+    int clip_tracker_save_count;
+
+    // Whether this subtree has filter bounds adjustment function. If so,
+    // it will need to be removed from stack when subtree is closed.
+    bool has_filter_bounds_adjustment;
+
+    // Whether there is a texture layer in this subtree.
+    bool has_texture;
   };
 
+  void MakeCurrentTransformIntegral();
+
+  DisplayListMatrixClipTracker clip_tracker_;
   std::shared_ptr<std::vector<SkRect>> rects_;
   State state_;
   SkISize frame_size_;
-  double frame_device_pixel_ratio_;
   std::vector<State> state_stack_;
+  std::vector<FilterBoundsAdjustment> filter_bounds_adjustment_stack_;
+
+  // Applies the filter bounds adjustment stack on provided rect.
+  // Rect must be in device coordinates.
+  SkRect ApplyFilterBoundsAdjustment(SkRect rect) const;
 
   SkRect damage_ = SkRect::MakeEmpty();
 
   PaintRegionMap& this_frame_paint_region_map_;
   const PaintRegionMap& last_frame_paint_region_map_;
+  bool has_raster_cache_;
 
   void AddDamage(const SkRect& rect);
+
+  void AlignRect(SkIRect& rect,
+                 int horizontal_alignment,
+                 int vertical_clip_alignment) const;
 
   struct Readback {
     // Index of rects_ entry that this readback belongs to. Used to
@@ -200,8 +262,6 @@ class DiffContext {
   std::vector<Readback> readbacks_;
   Statistics statistics_;
 };
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 }  // namespace flutter
 

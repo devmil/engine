@@ -29,13 +29,24 @@ NSDictionary* launchArgsMap;
             @"platform_view_multiple_background_foreground",
         @"--platform-view-cliprect" : @"platform_view_cliprect",
         @"--platform-view-cliprrect" : @"platform_view_cliprrect",
+        @"--platform-view-large-cliprrect" : @"platform_view_large_cliprrect",
         @"--platform-view-clippath" : @"platform_view_clippath",
+        @"--platform-view-cliprrect-with-transform" : @"platform_view_cliprrect_with_transform",
+        @"--platform-view-large-cliprrect-with-transform" :
+            @"platform_view_large_cliprrect_with_transform",
+        @"--platform-view-cliprect-with-transform" : @"platform_view_cliprect_with_transform",
+        @"--platform-view-clippath-with-transform" : @"platform_view_clippath_with_transform",
         @"--platform-view-transform" : @"platform_view_transform",
         @"--platform-view-opacity" : @"platform_view_opacity",
+        @"--platform-view-with-other-backdrop-filter" : @"platform_view_with_other_backdrop_filter",
+        @"--two-platform-views-with-other-backdrop-filter" :
+            @"two_platform_views_with_other_backdrop_filter",
         @"--platform-view-rotate" : @"platform_view_rotate",
         @"--non-full-screen-flutter-view-platform-view" :
             @"non_full_screen_flutter_view_platform_view",
         @"--bogus-font-text" : @"bogus_font_text",
+        @"--spawn-engine-works" : @"spawn_engine_works",
+        @"--platform-view-cliprect-after-moved" : @"platform_view_cliprect_after_moved",
       };
     });
     _identifier = launchArgsMap[launchArg];

@@ -8,10 +8,12 @@
 #include <memory>
 #include <optional>
 
-#include "flow/embedded_views.h"
 #include "flutter/common/settings.h"
 #include "flutter/common/task_runners.h"
+#include "flutter/display_list/image/dl_image.h"
 #include "flutter/flow/compositor_context.h"
+#include "flutter/flow/embedded_views.h"
+#include "flutter/flow/frame_timings.h"
 #include "flutter/flow/layers/layer_tree.h"
 #include "flutter/flow/surface.h"
 #include "flutter/fml/closure.h"
@@ -21,8 +23,27 @@
 #include "flutter/fml/synchronization/waitable_event.h"
 #include "flutter/fml/time/time_delta.h"
 #include "flutter/fml/time/time_point.h"
+#if IMPELLER_SUPPORTS_RENDERING
+// GN is having trouble understanding how this works in the Fuchsia builds.
+#include "flutter/impeller/aiks/aiks_context.h"  // nogncheck
+#include "flutter/impeller/renderer/context.h"   // nogncheck
+#endif                                           // IMPELLER_SUPPORTS_RENDERING
 #include "flutter/lib/ui/snapshot_delegate.h"
 #include "flutter/shell/common/pipeline.h"
+#include "flutter/shell/common/snapshot_controller.h"
+#include "flutter/shell/common/snapshot_surface_producer.h"
+#include "third_party/skia/include/core/SkData.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkRect.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/gpu/GrDirectContext.h"
+
+#if !IMPELLER_SUPPORTS_RENDERING
+namespace impeller {
+class Context;
+class AiksContext;
+}  // namespace impeller
+#endif  // !IMPELLER_SUPPORTS_RENDERING
 
 namespace flutter {
 
@@ -40,7 +61,9 @@ namespace flutter {
 /// and the on-screen render surface. The compositor context has all the GPU
 /// state necessary to render frames to the render surface.
 ///
-class Rasterizer final : public SnapshotDelegate {
+class Rasterizer final : public SnapshotDelegate,
+                         public Stopwatch::RefreshRateUpdater,
+                         public SnapshotController::Delegate {
  public:
   //----------------------------------------------------------------------------
   /// @brief      Used to forward events from the rasterizer to interested
@@ -82,13 +105,29 @@ class Rasterizer final : public SnapshotDelegate {
     /// Task runners used by the shell.
     virtual const TaskRunners& GetTaskRunners() const = 0;
 
+    /// The raster thread merger from parent shell's rasterizer.
+    virtual const fml::RefPtr<fml::RasterThreadMerger>
+    GetParentRasterThreadMerger() const = 0;
+
     /// Accessor for the shell's GPU sync switch, which determines whether GPU
     /// operations are allowed on the current thread.
     ///
     /// For example, on some platforms when the application is backgrounded it
     /// is critical that GPU operations are not processed.
-    virtual std::shared_ptr<fml::SyncSwitch> GetIsGpuDisabledSyncSwitch()
+    virtual std::shared_ptr<const fml::SyncSwitch> GetIsGpuDisabledSyncSwitch()
         const = 0;
+
+    virtual const Settings& GetSettings() const = 0;
+  };
+
+  //----------------------------------------------------------------------------
+  /// @brief     How to handle calls to MakeSkiaGpuImage.
+  enum class MakeGpuImageBehavior {
+    /// MakeSkiaGpuImage returns a GPU resident image, if possible.
+    kGpu,
+    /// MakeSkiaGpuImage returns a checkerboard bitmap. This is useful in test
+    /// contexts where no GPU surface is available.
+    kBitmap,
   };
 
   //----------------------------------------------------------------------------
@@ -97,24 +136,13 @@ class Rasterizer final : public SnapshotDelegate {
   ///             currently only created by the shell (which also sets itself up
   ///             as the rasterizer delegate).
   ///
-  /// @param[in]  delegate            The rasterizer delegate.
+  /// @param[in]  delegate                   The rasterizer delegate.
+  /// @param[in]  gpu_image_behavior         How to handle calls to
+  ///                                        MakeSkiaGpuImage.
   ///
-  Rasterizer(Delegate& delegate);
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-  //----------------------------------------------------------------------------
-  /// @brief      Creates a new instance of a rasterizer. Rasterizers may only
-  ///             be created on the raster task runner. Rasterizers are
-  ///             currently only created by the shell (which also sets itself up
-  ///             as the rasterizer delegate).
-  ///
-  /// @param[in]  delegate            The rasterizer delegate.
-  /// @param[in]  compositor_context  The compositor context used to hold all
-  ///                                 the GPU state used by the rasterizer.
-  ///
-  Rasterizer(Delegate& delegate,
-             std::unique_ptr<flutter::CompositorContext> compositor_context);
-#endif
+  explicit Rasterizer(
+      Delegate& delegate,
+      MakeGpuImageBehavior gpu_image_behavior = MakeGpuImageBehavior::kGpu);
 
   //----------------------------------------------------------------------------
   /// @brief      Destroys the rasterizer. This must happen on the raster task
@@ -123,6 +151,8 @@ class Rasterizer final : public SnapshotDelegate {
   ///             resources can be immediately collected as well.
   ///
   ~Rasterizer();
+
+  void SetImpellerContext(std::weak_ptr<impeller::Context> impeller_context);
 
   //----------------------------------------------------------------------------
   /// @brief      Rasterizers may be created well before an on-screen surface is
@@ -148,6 +178,13 @@ class Rasterizer final : public SnapshotDelegate {
   ///             surface. Calling a teardown without a setup is user error.
   ///
   void Teardown();
+
+  //----------------------------------------------------------------------------
+  /// @brief      Releases any resource used by the external view embedder.
+  ///             For example, overlay surfaces or Android views.
+  ///             On Android, this method post a task to the platform thread,
+  ///             and waits until it completes.
+  void TeardownExternalViewEmbedder();
 
   //----------------------------------------------------------------------------
   /// @brief      Notifies the rasterizer that there is a low memory situation
@@ -195,18 +232,13 @@ class Rasterizer final : public SnapshotDelegate {
   ///             textures instead of waiting for the framework to do the work
   ///             to generate the layer tree describing the same contents.
   ///
-  void DrawLastLayerTree();
+  void DrawLastLayerTree(
+      std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder);
 
-  //----------------------------------------------------------------------------
-  /// @brief      Gets the registry of external textures currently in use by the
-  ///             rasterizer. These textures may be updated at a cadence
-  ///             different from that of the Flutter application. When an
-  ///             external texture is referenced in the Flutter layer tree, that
-  ///             texture is composited within the Flutter layer tree.
-  ///
-  /// @return     A pointer to the external texture registry.
-  ///
-  flutter::TextureRegistry* GetTextureRegistry();
+  // |SnapshotDelegate|
+  GrDirectContext* GetGrContext() override;
+
+  std::shared_ptr<flutter::TextureRegistry> GetTextureRegistry() override;
 
   using LayerTreeDiscardCallback = std::function<bool(flutter::LayerTree&)>;
 
@@ -238,11 +270,11 @@ class Rasterizer final : public SnapshotDelegate {
   ///
   /// @param[in]  pipeline  The layer tree pipeline to take the next layer tree
   ///                       to render from.
-  /// @param[in]  discardCallback if specified and returns true, the layer tree
+  /// @param[in]  discard_callback if specified and returns true, the layer tree
   ///                             is discarded instead of being rendered
   ///
-  void Draw(fml::RefPtr<Pipeline<flutter::LayerTree>> pipeline,
-            LayerTreeDiscardCallback discardCallback = NoDiscard);
+  RasterStatus Draw(const std::shared_ptr<LayerTreePipeline>& pipeline,
+                    LayerTreeDiscardCallback discard_callback = NoDiscard);
 
   //----------------------------------------------------------------------------
   /// @brief      The type of the screenshot to obtain of the previously
@@ -272,6 +304,12 @@ class Rasterizer final : public SnapshotDelegate {
     /// container is used.
     ///
     CompressedImage,
+
+    //--------------------------------------------------------------------------
+    /// Reads the data directly from the Rasterizer's surface. The pixel format
+    /// is determined from the surface. This is the only way to read wide gamut
+    /// color data, but isn't supported everywhere.
+    SurfaceData,
   };
 
   //----------------------------------------------------------------------------
@@ -293,6 +331,11 @@ class Rasterizer final : public SnapshotDelegate {
     SkISize frame_size = SkISize::MakeEmpty();
 
     //--------------------------------------------------------------------------
+    /// Characterization of the format of the data in `data`.
+    ///
+    std::string format;
+
+    //--------------------------------------------------------------------------
     /// @brief      Creates an empty screenshot
     ///
     Screenshot();
@@ -302,8 +345,11 @@ class Rasterizer final : public SnapshotDelegate {
     ///
     /// @param[in]  p_data  The screenshot data
     /// @param[in]  p_size  The screenshot size.
+    /// @param[in]  p_format  The screenshot format.
     ///
-    Screenshot(sk_sp<SkData> p_data, SkISize p_size);
+    Screenshot(sk_sp<SkData> p_data,
+               SkISize p_size,
+               const std::string& p_format);
 
     //--------------------------------------------------------------------------
     /// @brief      The copy constructor for a screenshot.
@@ -362,6 +408,17 @@ class Rasterizer final : public SnapshotDelegate {
       const std::shared_ptr<ExternalViewEmbedder>& view_embedder);
 
   //----------------------------------------------------------------------------
+  /// @brief Set the snapshot surface producer. This is done on shell
+  ///        initialization. This is non-null on platforms that support taking
+  ///        GPU accelerated raster snapshots in the background.
+  ///
+  /// @param[in]  producer  A surface producer for raster snapshotting when the
+  ///                       onscreen surface is not available.
+  ///
+  void SetSnapshotSurfaceProducer(
+      std::unique_ptr<SnapshotSurfaceProducer> producer);
+
+  //----------------------------------------------------------------------------
   /// @brief      Returns a pointer to the compositor context used by this
   ///             rasterizer. This pointer will never be `nullptr`.
   ///
@@ -370,6 +427,14 @@ class Rasterizer final : public SnapshotDelegate {
   flutter::CompositorContext* compositor_context() {
     return compositor_context_.get();
   }
+
+  //----------------------------------------------------------------------------
+  /// @brief      Returns the raster thread merger used by this rasterizer.
+  ///             This may be `nullptr`.
+  ///
+  /// @return     The raster thread merger used by this rasterizer.
+  ///
+  fml::RefPtr<fml::RasterThreadMerger> GetRasterThreadMerger();
 
   //----------------------------------------------------------------------------
   /// @brief      Skia has no notion of time. To work around the performance
@@ -434,39 +499,54 @@ class Rasterizer final : public SnapshotDelegate {
   ///
   void DisableThreadMergerIfNeeded();
 
-  /// @brief   Mechanism to stop thread merging when using shared engine
-  ///          components.
-  /// @details This is a temporary workaround until thread merging can be
-  ///          supported correctly.  This should be called on the raster
-  ///          thread.
-  /// @see     https://github.com/flutter/flutter/issues/73620
-  ///
-  void BlockThreadMerging() { shared_engine_block_thread_merging_ = true; }
-
  private:
-  Delegate& delegate_;
-  std::unique_ptr<Surface> surface_;
-  std::unique_ptr<flutter::CompositorContext> compositor_context_;
-  // This is the last successfully rasterized layer tree.
-  std::unique_ptr<flutter::LayerTree> last_layer_tree_;
-  // Set when we need attempt to rasterize the layer tree again. This layer_tree
-  // has not successfully rasterized. This can happen due to the change in the
-  // thread configuration. This will be inserted to the front of the pipeline.
-  std::unique_ptr<flutter::LayerTree> resubmitted_layer_tree_;
-  fml::closure next_frame_callback_;
-  bool user_override_resource_cache_bytes_;
-  std::optional<size_t> max_cache_bytes_;
-  fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger_;
-  fml::TaskRunnerAffineWeakPtrFactory<Rasterizer> weak_factory_;
-  std::shared_ptr<ExternalViewEmbedder> external_view_embedder_;
-  bool shared_engine_block_thread_merging_ = false;
+  // |SnapshotDelegate|
+  std::unique_ptr<GpuImageResult> MakeSkiaGpuImage(
+      sk_sp<DisplayList> display_list,
+      const SkImageInfo& image_info) override;
 
   // |SnapshotDelegate|
-  sk_sp<SkImage> MakeRasterSnapshot(sk_sp<SkPicture> picture,
+  sk_sp<DlImage> MakeRasterSnapshot(sk_sp<DisplayList> display_list,
                                     SkISize picture_size) override;
 
   // |SnapshotDelegate|
   sk_sp<SkImage> ConvertToRasterImage(sk_sp<SkImage> image) override;
+
+  // |Stopwatch::Delegate|
+  /// Time limit for a smooth frame.
+  ///
+  /// See: `DisplayManager::GetMainDisplayRefreshRate`.
+  fml::Milliseconds GetFrameBudget() const override;
+
+  // |SnapshotController::Delegate|
+  const std::unique_ptr<Surface>& GetSurface() const override {
+    return surface_;
+  }
+
+  // |SnapshotController::Delegate|
+  std::shared_ptr<impeller::AiksContext> GetAiksContext() const override {
+#if IMPELLER_SUPPORTS_RENDERING
+    if (surface_) {
+      return surface_->GetAiksContext();
+    }
+    if (auto context = impeller_context_.lock()) {
+      return std::make_shared<impeller::AiksContext>(context);
+    }
+#endif
+    return nullptr;
+  }
+
+  // |SnapshotController::Delegate|
+  const std::unique_ptr<SnapshotSurfaceProducer>& GetSnapshotSurfaceProducer()
+      const override {
+    return snapshot_surface_producer_;
+  }
+
+  // |SnapshotController::Delegate|
+  std::shared_ptr<const fml::SyncSwitch> GetIsGpuDisabledSyncSwitch()
+      const override {
+    return delegate_.GetIsGpuDisabledSyncSwitch();
+  }
 
   sk_sp<SkData> ScreenshotLayerTreeAsImage(
       flutter::LayerTree* tree,
@@ -474,18 +554,48 @@ class Rasterizer final : public SnapshotDelegate {
       GrDirectContext* surface_context,
       bool compressed);
 
-  sk_sp<SkImage> DoMakeRasterSnapshot(
-      SkISize size,
-      std::function<void(SkCanvas*)> draw_callback);
+  RasterStatus DoDraw(
+      std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder,
+      std::unique_ptr<flutter::LayerTree> layer_tree,
+      float device_pixel_ratio);
 
-  RasterStatus DoDraw(std::unique_ptr<flutter::LayerTree> layer_tree);
+  RasterStatus DrawToSurface(FrameTimingsRecorder& frame_timings_recorder,
+                             flutter::LayerTree& layer_tree,
+                             float device_pixel_ratio);
 
-  RasterStatus DrawToSurface(flutter::LayerTree& layer_tree);
+  RasterStatus DrawToSurfaceUnsafe(FrameTimingsRecorder& frame_timings_recorder,
+                                   flutter::LayerTree& layer_tree,
+                                   float device_pixel_ratio);
 
   void FireNextFrameCallbackIfPresent();
 
   static bool NoDiscard(const flutter::LayerTree& layer_tree) { return false; }
+  static bool ShouldResubmitFrame(const RasterStatus& raster_status);
 
+  Delegate& delegate_;
+  MakeGpuImageBehavior gpu_image_behavior_;
+  std::weak_ptr<impeller::Context> impeller_context_;
+  std::unique_ptr<Surface> surface_;
+  std::unique_ptr<SnapshotSurfaceProducer> snapshot_surface_producer_;
+  std::unique_ptr<flutter::CompositorContext> compositor_context_;
+  // This is the last successfully rasterized layer tree.
+  std::unique_ptr<flutter::LayerTree> last_layer_tree_;
+  float last_device_pixel_ratio_;
+  // Set when we need attempt to rasterize the layer tree again. This layer_tree
+  // has not successfully rasterized. This can happen due to the change in the
+  // thread configuration. This will be inserted to the front of the pipeline.
+  std::unique_ptr<flutter::LayerTree> resubmitted_layer_tree_;
+  std::unique_ptr<FrameTimingsRecorder> resubmitted_recorder_;
+  float resubmitted_pixel_ratio_;
+  fml::closure next_frame_callback_;
+  bool user_override_resource_cache_bytes_;
+  std::optional<size_t> max_cache_bytes_;
+  fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger_;
+  std::shared_ptr<ExternalViewEmbedder> external_view_embedder_;
+  std::unique_ptr<SnapshotController> snapshot_controller_;
+
+  // WeakPtrFactory must be the last member.
+  fml::TaskRunnerAffineWeakPtrFactory<Rasterizer> weak_factory_;
   FML_DISALLOW_COPY_AND_ASSIGN(Rasterizer);
 };
 

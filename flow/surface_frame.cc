@@ -3,39 +3,42 @@
 // found in the LICENSE file.
 
 #include "flutter/flow/surface_frame.h"
+
+#include <limits>
+#include <utility>
+
 #include "flutter/fml/logging.h"
+#include "flutter/fml/trace_event.h"
+
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/utils/SkNWayCanvas.h"
 
 namespace flutter {
 
 SurfaceFrame::SurfaceFrame(sk_sp<SkSurface> surface,
-                           bool supports_readback,
-                           const SubmitCallback& submit_callback)
-    : surface_(surface),
-      supports_readback_(supports_readback),
-      submit_callback_(submit_callback) {
-  FML_DCHECK(submit_callback_);
-}
-
-SurfaceFrame::SurfaceFrame(sk_sp<SkSurface> surface,
-                           bool supports_readback,
+                           FramebufferInfo framebuffer_info,
                            const SubmitCallback& submit_callback,
-                           std::unique_ptr<GLContextResult> context_result)
-    : submitted_(false),
-      surface_(surface),
-      supports_readback_(supports_readback),
+                           SkISize frame_size,
+                           std::unique_ptr<GLContextResult> context_result,
+                           bool display_list_fallback)
+    : surface_(std::move(surface)),
+      framebuffer_info_(framebuffer_info),
       submit_callback_(submit_callback),
       context_result_(std::move(context_result)) {
   FML_DCHECK(submit_callback_);
-}
-
-SurfaceFrame::~SurfaceFrame() {
-  if (submit_callback_ && !submitted_) {
-    // Dropping without a Submit.
-    submit_callback_(*this, nullptr);
+  if (surface_) {
+    adapter_.set_canvas(surface_->getCanvas());
+    canvas_ = &adapter_;
+  } else if (display_list_fallback) {
+    FML_DCHECK(!frame_size.isEmpty());
+    dl_builder_ =
+        sk_make_sp<DisplayListBuilder>(SkRect::Make(frame_size), true);
+    canvas_ = dl_builder_.get();
   }
 }
 
 bool SurfaceFrame::Submit() {
+  TRACE_EVENT0("flutter", "SurfaceFrame::Submit");
   if (submitted_) {
     return false;
   }
@@ -49,8 +52,8 @@ bool SurfaceFrame::IsSubmitted() const {
   return submitted_;
 }
 
-SkCanvas* SurfaceFrame::SkiaCanvas() {
-  return surface_ != nullptr ? surface_->getCanvas() : nullptr;
+DlCanvas* SurfaceFrame::Canvas() {
+  return canvas_;
 }
 
 sk_sp<SkSurface> SurfaceFrame::SkiaSurface() const {
@@ -62,11 +65,20 @@ bool SurfaceFrame::PerformSubmit() {
     return false;
   }
 
-  if (submit_callback_(*this, SkiaCanvas())) {
+  if (submit_callback_(*this, Canvas())) {
     return true;
   }
 
   return false;
+}
+
+sk_sp<DisplayListBuilder> SurfaceFrame::GetDisplayListBuilder() {
+  return dl_builder_;
+}
+
+sk_sp<DisplayList> SurfaceFrame::BuildDisplayList() {
+  TRACE_EVENT0("impeller", "SurfaceFrame::BuildDisplayList");
+  return dl_builder_ ? dl_builder_->Build() : nullptr;
 }
 
 }  // namespace flutter

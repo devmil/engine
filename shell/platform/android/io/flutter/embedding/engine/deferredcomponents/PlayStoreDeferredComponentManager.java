@@ -66,7 +66,7 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
 
   private class FeatureInstallStateUpdatedListener implements SplitInstallStateUpdatedListener {
     @SuppressLint("DefaultLocale")
-    public void onStateUpdate(SplitInstallSessionState state) {
+    public void onStateUpdate(@NonNull SplitInstallSessionState state) {
       int sessionId = state.sessionId();
       if (sessionIdToName.get(sessionId) != null) {
         switch (state.status()) {
@@ -231,7 +231,7 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     return true;
   }
 
-  public void setDeferredComponentChannel(DeferredComponentChannel channel) {
+  public void setDeferredComponentChannel(@NonNull DeferredComponentChannel channel) {
     this.channel = channel;
   }
 
@@ -269,22 +269,26 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
               "No loading unit to dynamic feature module name found. Ensure '"
                   + MAPPING_KEY
                   + "' is defined in the base module's AndroidManifest.");
-        } else {
-          for (String entry : rawMappingString.split(",")) {
-            // Split with -1 param to include empty string following trailing ":"
-            String[] splitEntry = entry.split(":", -1);
-            int loadingUnitId = Integer.parseInt(splitEntry[0]);
-            loadingUnitIdToComponentNames.put(loadingUnitId, splitEntry[1]);
-            if (splitEntry.length > 2) {
-              loadingUnitIdToSharedLibraryNames.put(loadingUnitId, splitEntry[2]);
-            }
+          return;
+        }
+        if (rawMappingString.equals("")) {
+          // Asset-only components, so no loading units to map.
+          return;
+        }
+        for (String entry : rawMappingString.split(",")) {
+          // Split with -1 param to include empty string following trailing ":"
+          String[] splitEntry = entry.split(":", -1);
+          int loadingUnitId = Integer.parseInt(splitEntry[0]);
+          loadingUnitIdToComponentNames.put(loadingUnitId, splitEntry[1]);
+          if (splitEntry.length > 2) {
+            loadingUnitIdToSharedLibraryNames.put(loadingUnitId, splitEntry[2]);
           }
         }
       }
     }
   }
 
-  public void installDeferredComponent(int loadingUnitId, String componentName) {
+  public void installDeferredComponent(int loadingUnitId, @Nullable String componentName) {
     String resolvedComponentName =
         componentName != null ? componentName : loadingUnitIdToComponentNames.get(loadingUnitId);
     if (resolvedComponentName == null) {
@@ -353,7 +357,9 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
             });
   }
 
-  public String getDeferredComponentInstallState(int loadingUnitId, String componentName) {
+  @NonNull
+  public String getDeferredComponentInstallState(
+      int loadingUnitId, @Nullable String componentName) {
     String resolvedComponentName =
         componentName != null ? componentName : loadingUnitIdToComponentNames.get(loadingUnitId);
     if (resolvedComponentName == null) {
@@ -371,7 +377,7 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     return sessionIdToState.get(sessionId);
   }
 
-  public void loadAssets(int loadingUnitId, String componentName) {
+  public void loadAssets(int loadingUnitId, @NonNull String componentName) {
     if (!verifyJNI()) {
       return;
     }
@@ -389,7 +395,7 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     }
   }
 
-  public void loadDartLibrary(int loadingUnitId, String componentName) {
+  public void loadDartLibrary(int loadingUnitId, @NonNull String componentName) {
     if (!verifyJNI()) {
       return;
     }
@@ -421,18 +427,34 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     List<String> apkPaths = new ArrayList<>();
     // If not found in APKs, we check in extracted native libs for the lib directly.
     List<String> soPaths = new ArrayList<>();
+
     Queue<File> searchFiles = new LinkedList<>();
+    // Downloaded modules are stored here
     searchFiles.add(context.getFilesDir());
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      // The initial installed apks are provided by `sourceDirs` in ApplicationInfo.
+      // The jniLibs we want are in the splits not the baseDir. These
+      // APKs are only searched as a fallback, as base libs generally do not need
+      // to be fully path referenced.
+      for (String path : context.getApplicationInfo().splitSourceDirs) {
+        searchFiles.add(new File(path));
+      }
+    }
+
     while (!searchFiles.isEmpty()) {
       File file = searchFiles.remove();
-      if (file != null && file.isDirectory()) {
+      if (file != null && file.isDirectory() && file.listFiles() != null) {
         for (File f : file.listFiles()) {
           searchFiles.add(f);
         }
         continue;
       }
       String name = file.getName();
-      if (name.endsWith(".apk") && name.startsWith(componentName) && name.contains(pathAbi)) {
+      // Special case for "split_config" since android base module non-master apks are
+      // initially installed with the "split_config" prefix/name.
+      if (name.endsWith(".apk")
+          && (name.startsWith(componentName) || name.startsWith("split_config"))
+          && name.contains(pathAbi)) {
         apkPaths.add(file.getAbsolutePath());
         continue;
       }
@@ -455,10 +477,10 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     }
 
     flutterJNI.loadDartDeferredLibrary(
-        loadingUnitId, searchPaths.toArray(new String[apkPaths.size()]));
+        loadingUnitId, searchPaths.toArray(new String[searchPaths.size()]));
   }
 
-  public boolean uninstallDeferredComponent(int loadingUnitId, String componentName) {
+  public boolean uninstallDeferredComponent(int loadingUnitId, @Nullable String componentName) {
     String resolvedComponentName =
         componentName != null ? componentName : loadingUnitIdToComponentNames.get(loadingUnitId);
     if (resolvedComponentName == null) {

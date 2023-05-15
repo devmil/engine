@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTERENGINE_INTERNAL_H_
-#define FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTERENGINE_INTERNAL_H_
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTER_ENGINE_INTERNAL_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTER_ENGINE_INTERNAL_H_
 
 #import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterEngine.h"
 
@@ -14,8 +14,12 @@
 #include "flutter/shell/common/platform_view.h"
 #include "flutter/shell/common/rasterizer.h"
 #include "flutter/shell/common/shell.h"
+
+#include "flutter/shell/platform/embedder/embedder.h"
+
 #import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterEngine.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterDartProject_Internal.h"
+#import "flutter/shell/platform/darwin/ios/framework/Source/FlutterIndirectScribbleDelegate.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterPlatformPlugin.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterPlatformViews_Internal.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterRestorationPlugin.h"
@@ -23,7 +27,9 @@
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.h"
 #import "flutter/shell/platform/darwin/ios/platform_view_ios.h"
 
-extern NSString* const FlutterEngineWillDealloc;
+NS_ASSUME_NONNULL_BEGIN
+
+extern NSString* const kFlutterEngineWillDealloc;
 
 @interface FlutterEngine () <FlutterViewEngineDelegate>
 
@@ -44,10 +50,12 @@ extern NSString* const FlutterEngineWillDealloc;
 - (std::shared_ptr<flutter::FlutterPlatformViewsController>&)platformViewsController;
 - (FlutterTextInputPlugin*)textInputPlugin;
 - (FlutterRestorationPlugin*)restorationPlugin;
-- (void)launchEngine:(NSString*)entrypoint libraryURI:(NSString*)libraryOrNil;
-- (BOOL)createShell:(NSString*)entrypoint
-         libraryURI:(NSString*)libraryOrNil
-       initialRoute:(NSString*)initialRoute;
+- (void)launchEngine:(nullable NSString*)entrypoint
+          libraryURI:(nullable NSString*)libraryOrNil
+      entrypointArgs:(nullable NSArray<NSString*>*)entrypointArgs;
+- (BOOL)createShell:(nullable NSString*)entrypoint
+         libraryURI:(nullable NSString*)libraryOrNil
+       initialRoute:(nullable NSString*)initialRoute;
 - (void)attachView;
 - (void)notifyLowMemory;
 - (flutter::PlatformViewIOS*)iosPlatformView;
@@ -60,9 +68,22 @@ extern NSString* const FlutterEngineWillDealloc;
  * This results in a faster creation time and a smaller memory footprint engine.
  * This should only be called on a FlutterEngine that is running.
  */
-- (FlutterEngine*)spawnWithEntrypoint:(/*nullable*/ NSString*)entrypoint
-                           libraryURI:(/*nullable*/ NSString*)libraryURI;
+- (FlutterEngine*)spawnWithEntrypoint:(nullable NSString*)entrypoint
+                           libraryURI:(nullable NSString*)libraryURI
+                         initialRoute:(nullable NSString*)initialRoute
+                       entrypointArgs:(nullable NSArray<NSString*>*)entrypointArgs;
 
+/**
+ * Dispatches the given key event data to the framework through the engine.
+ * The callback is called once the response from the framework is received.
+ */
+- (void)sendKeyEvent:(const FlutterKeyEvent&)event
+            callback:(nullable FlutterKeyEventCallback)callback
+            userData:(nullable void*)userData;
+
+@property(nonatomic, readonly) FlutterDartProject* project;
 @end
 
-#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTERENGINE_INTERNAL_H_
+NS_ASSUME_NONNULL_END
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_FLUTTER_ENGINE_INTERNAL_H_

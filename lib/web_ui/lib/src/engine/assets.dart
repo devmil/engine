@@ -2,27 +2,56 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'dom.dart';
+import 'util.dart';
 
 /// This class downloads assets over the network.
 ///
-/// The assets are resolved relative to [assetsDir] inside the directory
-/// containing the currently executing JS script.
+/// Assets are resolved relative to [assetsDir] inside the absolute base
+/// specified by [assetBase] (optional).
+///
+/// By default, URLs are relative to the `<base>` of the current website.
 class AssetManager {
+  /// Initializes [AssetManager] with paths.
+  AssetManager({
+    this.assetsDir = _defaultAssetsDir,
+    String? assetBase,
+  })  : assert(
+          assetBase == null || assetBase.endsWith('/'),
+          '`assetBase` must end with a `/` character.',
+        ),
+        _assetBase = assetBase;
+
   static const String _defaultAssetsDir = 'assets';
 
   /// The directory containing the assets.
   final String assetsDir;
 
-  const AssetManager({this.assetsDir = _defaultAssetsDir});
+  /// The absolute base URL for assets.
+  String? _assetBase;
 
-  String? get _baseUrl {
-    return html.window.document
-        .querySelectorAll('meta')
-        .whereType<html.MetaElement?>()
-        .firstWhere((dynamic e) => e.name == 'assetBase', orElse: () => null)
-        ?.content;
+  // Cache a value for `_assetBase` so we don't hit the DOM multiple times.
+  String get _baseUrl => _assetBase ??= _deprecatedAssetBase ?? '';
+
+  // Retrieves the `assetBase` value from the DOM.
+  //
+  // This warns the user and points them to the new initializeEngine style.
+  String? get _deprecatedAssetBase {
+    final DomHTMLMetaElement? meta = domWindow.document
+        .querySelector('meta[name=assetBase]') as DomHTMLMetaElement?;
+
+    final String? fallbackBaseUrl = meta?.content;
+
+    if (fallbackBaseUrl != null) {
+      // Warn users that they're using a deprecated configuration style...
+      domWindow.console.warn('The `assetBase` meta tag is now deprecated.\n'
+          'Use engineInitializer.initializeEngine(config) instead.\n'
+          'See: https://docs.flutter.dev/development/platform-integration/web/initialization');
+    }
+    return fallbackBaseUrl;
   }
 
   /// Returns the URL to load the asset from, given the asset key.
@@ -46,85 +75,24 @@ class AssetManager {
     if (Uri.parse(asset).hasScheme) {
       return Uri.encodeFull(asset);
     }
-    return Uri.encodeFull((_baseUrl ?? '') + '$assetsDir/$asset');
+    return Uri.encodeFull('$_baseUrl$assetsDir/$asset');
   }
 
+  /// Loads an asset and returns the server response.
+  Future<HttpFetchResponse> loadAsset(String asset) {
+    return httpFetch(getAssetUrl(asset));
+  }
+
+  /// Loads an asset using an [DomXMLHttpRequest] and returns data as [ByteData].
   Future<ByteData> load(String asset) async {
     final String url = getAssetUrl(asset);
-    try {
-      final html.HttpRequest request =
-          await html.HttpRequest.request(url, responseType: 'arraybuffer');
+    final HttpFetchResponse response = await httpFetch(url);
 
-      final ByteBuffer response = request.response;
-      return response.asByteData();
-    } on html.ProgressEvent catch (e) {
-      final html.EventTarget? target = e.target;
-      if (target is html.HttpRequest) {
-        if (target.status == 404 && asset == 'AssetManifest.json') {
-          printWarning('Asset manifest does not exist at `$url` – ignoring.');
-          return Uint8List.fromList(utf8.encode('{}')).buffer.asByteData();
-        }
-        throw AssetManagerException(url, target.status!);
-      }
-
-      printWarning('Caught ProgressEvent with target: $target');
-      rethrow;
+    if (response.status == 404 && asset == 'AssetManifest.json') {
+      printWarning('Asset manifest does not exist at `$url` - ignoring.');
+      return Uint8List.fromList(utf8.encode('{}')).buffer.asByteData();
     }
-  }
-}
 
-class AssetManagerException implements Exception {
-  final String url;
-  final int httpStatus;
-
-  AssetManagerException(this.url, this.httpStatus);
-
-  @override
-  String toString() => 'Failed to load asset at "$url" ($httpStatus)';
-}
-
-/// An asset manager that gives fake empty responses for assets.
-class WebOnlyMockAssetManager implements AssetManager {
-  String defaultAssetsDir = '';
-  String defaultAssetManifest = '{}';
-  String defaultFontManifest = '''[
-   {
-      "family":"$_robotoFontFamily",
-      "fonts":[{"asset":"$_robotoTestFontUrl"}]
-   },
-   {
-      "family":"$_ahemFontFamily",
-      "fonts":[{"asset":"$_ahemFontUrl"}]
-   }
-  ]''';
-
-  @override
-  String get assetsDir => defaultAssetsDir;
-
-  @override
-  String get _baseUrl => '';
-
-  @override
-  String getAssetUrl(String asset) => '$asset';
-
-  @override
-  Future<ByteData> load(String asset) {
-    if (asset == getAssetUrl('AssetManifest.json')) {
-      return Future<ByteData>.value(
-          _toByteData(utf8.encode(defaultAssetManifest)));
-    }
-    if (asset == getAssetUrl('FontManifest.json')) {
-      return Future<ByteData>.value(
-          _toByteData(utf8.encode(defaultFontManifest)));
-    }
-    throw AssetManagerException(asset, 404);
-  }
-
-  ByteData _toByteData(List<int> bytes) {
-    final ByteData byteData = ByteData(bytes.length);
-    for (int i = 0; i < bytes.length; i++) {
-      byteData.setUint8(i, bytes[i]);
-    }
-    return byteData;
+    return (await response.payload.asByteBuffer()).asByteData();
   }
 }

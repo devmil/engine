@@ -50,8 +50,7 @@ TEST_F(ShellTest, PathVolatilityOldPathsBecomeNonVolatile) {
 
   AddNativeCallback("ValidatePath", CREATE_NATIVE_ENTRY(native_validate_path));
 
-  std::unique_ptr<Shell> shell =
-      CreateShell(std::move(settings), std::move(task_runners));
+  std::unique_ptr<Shell> shell = CreateShell(settings, task_runners);
 
   ASSERT_TRUE(shell->IsSetup());
   auto configuration = RunConfiguration::InferFromSettings(settings);
@@ -63,10 +62,11 @@ TEST_F(ShellTest, PathVolatilityOldPathsBecomeNonVolatile) {
 
   message_latch->Wait();
 
-  DestroyShell(std::move(shell), std::move(task_runners));
+  DestroyShell(std::move(shell), task_runners);
 }
 
 TEST_F(ShellTest, PathVolatilityGCRemovesPathFromTracker) {
+  static_assert(VolatilePathTracker::kFramesOfVolatility > 1);
   auto message_latch = std::make_shared<fml::AutoResetWaitableEvent>();
 
   auto native_validate_path = [message_latch](Dart_NativeArguments args) {
@@ -77,26 +77,23 @@ TEST_F(ShellTest, PathVolatilityGCRemovesPathFromTracker) {
     EXPECT_FALSE(Dart_IsError(result));
     CanvasPath* path = reinterpret_cast<CanvasPath*>(peer);
     EXPECT_TRUE(path);
-    path->AddRef();
     EXPECT_TRUE(path->path().isVolatile());
     std::shared_ptr<VolatilePathTracker> tracker =
         UIDartState::Current()->GetVolatilePathTracker();
     EXPECT_TRUE(tracker);
-
-    static_assert(VolatilePathTracker::kFramesOfVolatility > 1);
+    EXPECT_EQ(GetLiveTrackedPathCount(tracker), 1ul);
     EXPECT_TRUE(path->path().isVolatile());
+
     tracker->OnFrame();
+    EXPECT_EQ(GetLiveTrackedPathCount(tracker), 1ul);
     EXPECT_TRUE(path->path().isVolatile());
 
     // simulate GC
-    path->ReleaseDartWrappableReference();
+    path->Release();
+    EXPECT_EQ(GetLiveTrackedPathCount(tracker), 0ul);
 
     tracker->OnFrame();
-    // Because the path got GC'd, it was removed from the cache and we're the
-    // only one holding it.
-    EXPECT_TRUE(path->path().isVolatile());
-
-    path->Release();
+    EXPECT_EQ(GetLiveTrackedPathCount(tracker), 0ul);
 
     message_latch->Signal();
   };
@@ -111,8 +108,7 @@ TEST_F(ShellTest, PathVolatilityGCRemovesPathFromTracker) {
 
   AddNativeCallback("ValidatePath", CREATE_NATIVE_ENTRY(native_validate_path));
 
-  std::unique_ptr<Shell> shell =
-      CreateShell(std::move(settings), std::move(task_runners));
+  std::unique_ptr<Shell> shell = CreateShell(settings, task_runners);
 
   ASSERT_TRUE(shell->IsSetup());
   auto configuration = RunConfiguration::InferFromSettings(settings);
@@ -124,7 +120,7 @@ TEST_F(ShellTest, PathVolatilityGCRemovesPathFromTracker) {
 
   message_latch->Wait();
 
-  DestroyShell(std::move(shell), std::move(task_runners));
+  DestroyShell(std::move(shell), task_runners);
 }
 
 // Screen diffing tests use deterministic rendering. Allowing a path to be
@@ -168,8 +164,7 @@ TEST_F(ShellTest, DeterministicRenderingDisablesPathVolatility) {
 
   AddNativeCallback("ValidatePath", CREATE_NATIVE_ENTRY(native_validate_path));
 
-  std::unique_ptr<Shell> shell =
-      CreateShell(std::move(settings), std::move(task_runners));
+  std::unique_ptr<Shell> shell = CreateShell(settings, task_runners);
 
   ASSERT_TRUE(shell->IsSetup());
   auto configuration = RunConfiguration::InferFromSettings(settings);
@@ -181,7 +176,7 @@ TEST_F(ShellTest, DeterministicRenderingDisablesPathVolatility) {
 
   message_latch->Wait();
 
-  DestroyShell(std::move(shell), std::move(task_runners));
+  DestroyShell(std::move(shell), task_runners);
 }
 
 }  // namespace testing

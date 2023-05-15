@@ -13,6 +13,10 @@
 #include "flutter/shell/platform/embedder/tests/embedder_test_context_metal.h"
 #endif
 
+#ifdef SHELL_ENABLE_VULKAN
+#include "flutter/shell/platform/embedder/tests/embedder_test_context_vulkan.h"
+#endif
+
 namespace flutter {
 namespace testing {
 
@@ -33,6 +37,12 @@ EmbedderTestContext& EmbedderTest::GetEmbedderContext(
             std::make_unique<EmbedderTestContextSoftware>(
                 GetFixturesDirectory());
         break;
+#ifdef SHELL_ENABLE_VULKAN
+      case EmbedderTestContextType::kVulkanContext:
+        embedder_contexts_[type] =
+            std::make_unique<EmbedderTestContextVulkan>(GetFixturesDirectory());
+        break;
+#endif
 #ifdef SHELL_ENABLE_GL
       case EmbedderTestContextType::kOpenGLContext:
         embedder_contexts_[type] =

@@ -14,10 +14,11 @@
 #include "flutter/fml/synchronization/count_down_latch.h"
 #include "flutter/fml/synchronization/waitable_event.h"
 #include "flutter/fml/task_runner.h"
+#include "flutter/fml/time/chrono_timestamp_provider.h"
 #include "gtest/gtest.h"
 
 #define TIMESENSITIVE(x) TimeSensitiveTest_##x
-#if OS_WIN
+#if FML_OS_WIN
 #define PLATFORM_SPECIFIC_CAPTURE(...) [ __VA_ARGS__, count ]
 #else
 #define PLATFORM_SPECIFIC_CAPTURE(...) [__VA_ARGS__]
@@ -116,7 +117,7 @@ TEST(MessageLoop, DelayedTasksAtSameTimeAreRunInOrder) {
     auto& loop = fml::MessageLoop::GetCurrent();
     size_t current = 0;
     const auto now_plus_some =
-        fml::TimePoint::Now() + fml::TimeDelta::FromMilliseconds(2);
+        fml::ChronoTicksSinceEpoch() + fml::TimeDelta::FromMilliseconds(2);
     for (size_t i = 0; i < count; i++) {
       loop.GetTaskRunner()->PostTaskForTime(
           PLATFORM_SPECIFIC_CAPTURE(&terminated, i, &current)() {
@@ -155,14 +156,19 @@ TEST(MessageLoop, CheckRunsTaskOnCurrentThread) {
 }
 
 TEST(MessageLoop, TIMESENSITIVE(SingleDelayedTaskByDelta)) {
+#if defined(OS_FUCHSIA)
+  GTEST_SKIP()
+      << "This test does not work on Fuchsia. https://fxbug.dev/110020 ";
+#endif  // OS_FUCHSIA
+
   bool checked = false;
   std::thread thread([&checked]() {
     fml::MessageLoop::EnsureInitializedForCurrentThread();
     auto& loop = fml::MessageLoop::GetCurrent();
-    auto begin = fml::TimePoint::Now();
+    auto begin = fml::ChronoTicksSinceEpoch();
     loop.GetTaskRunner()->PostDelayedTask(
         [begin, &checked]() {
-          auto delta = fml::TimePoint::Now() - begin;
+          auto delta = fml::ChronoTicksSinceEpoch() - begin;
           auto ms = delta.ToMillisecondsF();
           ASSERT_GE(ms, 3);
           ASSERT_LE(ms, 7);
@@ -177,21 +183,26 @@ TEST(MessageLoop, TIMESENSITIVE(SingleDelayedTaskByDelta)) {
 }
 
 TEST(MessageLoop, TIMESENSITIVE(SingleDelayedTaskForTime)) {
+#if defined(OS_FUCHSIA)
+  GTEST_SKIP()
+      << "This test does not work on Fuchsia. https://fxbug.dev/110020 ";
+#endif  // OS_FUCHSIA
+
   bool checked = false;
   std::thread thread([&checked]() {
     fml::MessageLoop::EnsureInitializedForCurrentThread();
     auto& loop = fml::MessageLoop::GetCurrent();
-    auto begin = fml::TimePoint::Now();
+    auto begin = fml::ChronoTicksSinceEpoch();
     loop.GetTaskRunner()->PostTaskForTime(
         [begin, &checked]() {
-          auto delta = fml::TimePoint::Now() - begin;
+          auto delta = fml::ChronoTicksSinceEpoch() - begin;
           auto ms = delta.ToMillisecondsF();
           ASSERT_GE(ms, 3);
           ASSERT_LE(ms, 7);
           checked = true;
           fml::MessageLoop::GetCurrent().Terminate();
         },
-        fml::TimePoint::Now() + fml::TimeDelta::FromMilliseconds(5));
+        fml::ChronoTicksSinceEpoch() + fml::TimeDelta::FromMilliseconds(5));
     loop.Run();
   });
   thread.join();
@@ -199,16 +210,21 @@ TEST(MessageLoop, TIMESENSITIVE(SingleDelayedTaskForTime)) {
 }
 
 TEST(MessageLoop, TIMESENSITIVE(MultipleDelayedTasksWithIncreasingDeltas)) {
+#if defined(OS_FUCHSIA)
+  GTEST_SKIP()
+      << "This test does not work on Fuchsia. https://fxbug.dev/110020 ";
+#endif  // OS_FUCHSIA
+
   const auto count = 10;
   int checked = false;
   std::thread thread(PLATFORM_SPECIFIC_CAPTURE(&checked)() {
     fml::MessageLoop::EnsureInitializedForCurrentThread();
     auto& loop = fml::MessageLoop::GetCurrent();
     for (int target_ms = 0 + 2; target_ms < count + 2; target_ms++) {
-      auto begin = fml::TimePoint::Now();
+      auto begin = fml::ChronoTicksSinceEpoch();
       loop.GetTaskRunner()->PostDelayedTask(
           PLATFORM_SPECIFIC_CAPTURE(begin, target_ms, &checked)() {
-            auto delta = fml::TimePoint::Now() - begin;
+            auto delta = fml::ChronoTicksSinceEpoch() - begin;
             auto ms = delta.ToMillisecondsF();
             ASSERT_GE(ms, target_ms - 2);
             ASSERT_LE(ms, target_ms + 2);
@@ -226,16 +242,21 @@ TEST(MessageLoop, TIMESENSITIVE(MultipleDelayedTasksWithIncreasingDeltas)) {
 }
 
 TEST(MessageLoop, TIMESENSITIVE(MultipleDelayedTasksWithDecreasingDeltas)) {
+#if defined(OS_FUCHSIA)
+  GTEST_SKIP()
+      << "This test does not work on Fuchsia. https://fxbug.dev/110020 ";
+#endif  // OS_FUCHSIA
+
   const auto count = 10;
   int checked = false;
   std::thread thread(PLATFORM_SPECIFIC_CAPTURE(&checked)() {
     fml::MessageLoop::EnsureInitializedForCurrentThread();
     auto& loop = fml::MessageLoop::GetCurrent();
     for (int target_ms = count + 2; target_ms > 0 + 2; target_ms--) {
-      auto begin = fml::TimePoint::Now();
+      auto begin = fml::ChronoTicksSinceEpoch();
       loop.GetTaskRunner()->PostDelayedTask(
           PLATFORM_SPECIFIC_CAPTURE(begin, target_ms, &checked)() {
-            auto delta = fml::TimePoint::Now() - begin;
+            auto delta = fml::ChronoTicksSinceEpoch() - begin;
             auto ms = delta.ToMillisecondsF();
             ASSERT_GE(ms, target_ms - 2);
             ASSERT_LE(ms, target_ms + 2);
@@ -261,7 +282,9 @@ TEST(MessageLoop, TaskObserverFire) {
     auto& loop = fml::MessageLoop::GetCurrent();
     size_t task_count = 0;
     size_t obs_count = 0;
-    auto obs = PLATFORM_SPECIFIC_CAPTURE(&obs_count)() { obs_count++; };
+    auto obs = PLATFORM_SPECIFIC_CAPTURE(&obs_count)() {
+      obs_count++;
+    };
     for (size_t i = 0; i < count; i++) {
       loop.GetTaskRunner()->PostTask(
           PLATFORM_SPECIFIC_CAPTURE(&terminated, i, &task_count)() {

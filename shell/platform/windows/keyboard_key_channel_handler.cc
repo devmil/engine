@@ -6,9 +6,9 @@
 
 #include <windows.h>
 
-#include <iostream>
-
+#include "flutter/fml/logging.h"
 #include "flutter/shell/platform/common/json_message_codec.h"
+#include "flutter/shell/platform/windows/keyboard_utils.h"
 
 namespace flutter {
 
@@ -31,6 +31,15 @@ static constexpr char kKeyDown[] = "keydown";
 // The maximum number of pending events to keep before
 // emitting a warning on the console about unhandled events.
 static constexpr int kMaxPendingEvents = 1000;
+
+// The bit for a scancode indicating the key is extended.
+//
+// Win32 defines some keys to be "extended", such as ShiftRight, which shares
+// the same scancode as its non-extended counterpart, such as ShiftLeft.  In
+// Chromium's scancode table, from which Flutter's physical key list is
+// derived, these keys are marked with this bit.  See
+// https://chromium.googlesource.com/codesearch/chromium/src/+/refs/heads/main/ui/events/keycodes/dom/dom_code_data.inc
+static constexpr int kScancodeExtended = 0xe000;
 
 // Re-definition of the modifiers for compatibility with the Flutter framework.
 // These have to be in sync with the framework's RawKeyEventDataWindows
@@ -55,11 +64,6 @@ static constexpr int kScrollLock = 1 << 13;
 /// with the re-defined values declared above for compatibility with the Flutter
 /// framework.
 int GetModsForKeyState() {
-  // TODO(clarkezone) need to add support for get modifier state for UWP
-  // https://github.com/flutter/flutter/issues/70202
-#ifdef WINUWP
-  return 0;
-#else
   int mods = 0;
 
   if (GetKeyState(VK_SHIFT) < 0)
@@ -91,7 +95,6 @@ int GetModsForKeyState() {
   if (GetKeyState(VK_SCROLL) < 0)
     mods |= kScrollLock;
   return mods;
-#endif
 }
 
 }  // namespace
@@ -106,6 +109,10 @@ KeyboardKeyChannelHandler::KeyboardKeyChannelHandler(
 
 KeyboardKeyChannelHandler::~KeyboardKeyChannelHandler() = default;
 
+void KeyboardKeyChannelHandler::SyncModifiersIfNeeded(int modifiers_state) {
+  // Do nothing
+}
+
 void KeyboardKeyChannelHandler::KeyboardHook(
     int key,
     int scancode,
@@ -119,20 +126,23 @@ void KeyboardKeyChannelHandler::KeyboardHook(
   rapidjson::Document event(rapidjson::kObjectType);
   auto& allocator = event.GetAllocator();
   event.AddMember(kKeyCodeKey, key, allocator);
-  event.AddMember(kScanCodeKey, scancode, allocator);
-  event.AddMember(kCharacterCodePointKey, character, allocator);
+  event.AddMember(kScanCodeKey, scancode | (extended ? kScancodeExtended : 0),
+                  allocator);
+  event.AddMember(kCharacterCodePointKey, UndeadChar(character), allocator);
   event.AddMember(kKeyMapKey, kWindowsKeyMap, allocator);
   event.AddMember(kModifiersKey, GetModsForKeyState(), allocator);
 
   switch (action) {
+    case WM_SYSKEYDOWN:
     case WM_KEYDOWN:
       event.AddMember(kTypeKey, kKeyDown, allocator);
       break;
+    case WM_SYSKEYUP:
     case WM_KEYUP:
       event.AddMember(kTypeKey, kKeyUp, allocator);
       break;
     default:
-      std::cerr << "Unknown key event action: " << action << std::endl;
+      FML_LOG(WARNING) << "Unknown key event action: " << action;
       callback(false);
       return;
   }
@@ -140,7 +150,7 @@ void KeyboardKeyChannelHandler::KeyboardHook(
                                                          size_t reply_size) {
     auto decoded = flutter::JsonMessageCodec::GetInstance().DecodeMessage(
         reply, reply_size);
-    bool handled = (*decoded)[kHandledKey].GetBool();
+    bool handled = decoded ? (*decoded)[kHandledKey].GetBool() : false;
     callback(handled);
   });
 }

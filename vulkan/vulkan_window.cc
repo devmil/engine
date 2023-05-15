@@ -9,34 +9,35 @@
 #include <memory>
 #include <string>
 
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "flutter/flutter_vma/flutter_skia_vma.h"
+#include "flutter/vulkan/vulkan_skia_proc_table.h"
 #include "vulkan_application.h"
 #include "vulkan_device.h"
 #include "vulkan_native_surface.h"
 #include "vulkan_surface.h"
 #include "vulkan_swapchain.h"
 
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/gpu/GrDirectContext.h"
+
 namespace vulkan {
 
 VulkanWindow::VulkanWindow(fml::RefPtr<VulkanProcTable> proc_table,
-                           std::unique_ptr<VulkanNativeSurface> native_surface,
-                           bool render_to_surface)
+                           std::unique_ptr<VulkanNativeSurface> native_surface)
     : VulkanWindow(/*context/*/ nullptr,
                    proc_table,
-                   std::move(native_surface),
-                   render_to_surface) {}
+                   std::move(native_surface)) {}
 
 VulkanWindow::VulkanWindow(const sk_sp<GrDirectContext>& context,
                            fml::RefPtr<VulkanProcTable> proc_table,
-                           std::unique_ptr<VulkanNativeSurface> native_surface,
-                           bool render_to_surface)
+                           std::unique_ptr<VulkanNativeSurface> native_surface)
     : valid_(false), vk(std::move(proc_table)), skia_gr_context_(context) {
   if (!vk || !vk->HasAcquiredMandatoryProcAddresses()) {
     FML_DLOG(INFO) << "Proc table has not acquired mandatory proc addresses.";
     return;
   }
 
-  if (native_surface == nullptr || !native_surface->IsValid()) {
+  if (native_surface && !native_surface->IsValid()) {
     FML_DLOG(INFO) << "Native surface is invalid.";
     return;
   }
@@ -70,9 +71,7 @@ VulkanWindow::VulkanWindow(const sk_sp<GrDirectContext>& context,
     return;
   }
 
-  // TODO(38466): Refactor GPU surface APIs take into account the fact that an
-  // external view embedder may want to render to the root surface.
-  if (!render_to_surface) {
+  if (!native_surface) {
     return;
   }
 
@@ -84,6 +83,12 @@ VulkanWindow::VulkanWindow(const sk_sp<GrDirectContext>& context,
     FML_DLOG(INFO) << "Vulkan surface is invalid.";
     return;
   }
+
+  // Needs to happen before GrDirectContext is created.
+  memory_allocator_ = flutter::FlutterSkiaVulkanMemoryAllocator::Make(
+      application_->GetAPIVersion(), application_->GetInstance(),
+      logical_device_->GetPhysicalDeviceHandle(), logical_device_->GetHandle(),
+      vk, true);
 
   // Create the Skia GrDirectContext.
 
@@ -119,13 +124,16 @@ bool VulkanWindow::CreateSkiaGrContext() {
     return false;
   }
 
-  sk_sp<GrDirectContext> context = GrDirectContext::MakeVulkan(backend_context);
+  GrContextOptions options;
+  options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
+  sk_sp<GrDirectContext> context =
+      GrDirectContext::MakeVulkan(backend_context, options);
 
   if (context == nullptr) {
     return false;
   }
 
-  context->setResourceCacheLimits(kGrCacheMaxCount, kGrCacheMaxByteSize);
+  context->setResourceCacheLimit(kGrCacheMaxByteSize);
 
   skia_gr_context_ = context;
 
@@ -133,7 +141,7 @@ bool VulkanWindow::CreateSkiaGrContext() {
 }
 
 bool VulkanWindow::CreateSkiaBackendContext(GrVkBackendContext* context) {
-  auto getProc = vk->CreateSkiaGetProc();
+  auto getProc = CreateSkiaGetProc(vk);
 
   if (getProc == nullptr) {
     return false;
@@ -156,6 +164,7 @@ bool VulkanWindow::CreateSkiaBackendContext(GrVkBackendContext* context) {
   context->fFeatures = skia_features;
   context->fGetProc = std::move(getProc);
   context->fOwnsInstanceAndDevice = false;
+  context->fMemoryAllocator = memory_allocator_;
   return true;
 }
 

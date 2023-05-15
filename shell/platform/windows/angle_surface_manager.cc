@@ -4,27 +4,21 @@
 
 #include "flutter/shell/platform/windows/angle_surface_manager.h"
 
-#include <iostream>
 #include <vector>
 
-#ifdef WINUWP
-#include <third_party/cppwinrt/generated/winrt/Windows.UI.Composition.h>
-#include <windows.ui.core.h>
-#endif
-
-#if defined(WINUWP) && defined(USECOREWINDOW)
-#include <winrt/Windows.UI.Core.h>
-#endif
+#include "flutter/fml/logging.h"
 
 // Logs an EGL error to stderr. This automatically calls eglGetError()
 // and logs the error code.
 static void LogEglError(std::string message) {
   EGLint error = eglGetError();
-  std::cerr << "EGL: " << message << std::endl;
-  std::cerr << "EGL: eglGetError returned " << error << std::endl;
+  FML_LOG(ERROR) << "EGL: " << message;
+  FML_LOG(ERROR) << "EGL: eglGetError returned " << error;
 }
 
 namespace flutter {
+
+int AngleSurfaceManager::instance_count_ = 0;
 
 std::unique_ptr<AngleSurfaceManager> AngleSurfaceManager::Create() {
   std::unique_ptr<AngleSurfaceManager> manager;
@@ -40,10 +34,12 @@ AngleSurfaceManager::AngleSurfaceManager()
       egl_display_(EGL_NO_DISPLAY),
       egl_context_(EGL_NO_CONTEXT) {
   initialize_succeeded_ = Initialize();
+  ++instance_count_;
 }
 
 AngleSurfaceManager::~AngleSurfaceManager() {
   CleanUp();
+  --instance_count_;
 }
 
 bool AngleSurfaceManager::InitializeEGL(
@@ -71,6 +67,9 @@ bool AngleSurfaceManager::InitializeEGL(
 }
 
 bool AngleSurfaceManager::Initialize() {
+  // TODO(dnfield): Enable MSAA here, see similar code in android_context_gl.cc
+  // Will need to plumb in argument from project bundle for sampling rate.
+  // https://github.com/flutter/flutter/issues/100392
   const EGLint config_attributes[] = {EGL_RED_SIZE,   8, EGL_GREEN_SIZE,   8,
                                       EGL_BLUE_SIZE,  8, EGL_ALPHA_SIZE,   8,
                                       EGL_DEPTH_SIZE, 8, EGL_STENCIL_SIZE, 8,
@@ -79,7 +78,7 @@ bool AngleSurfaceManager::Initialize() {
   const EGLint display_context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 2,
                                                EGL_NONE};
 
-  // These are prefered display attributes and request ANGLE's D3D11
+  // These are preferred display attributes and request ANGLE's D3D11
   // renderer. eglInitialize will only succeed with these attributes if the
   // hardware supports D3D11 Feature Level 10_0+.
   const EGLint d3d11_display_attributes[] = {
@@ -91,6 +90,12 @@ bool AngleSurfaceManager::Initialize() {
       // behalf of the application when it gets suspended.
       EGL_PLATFORM_ANGLE_ENABLE_AUTOMATIC_TRIM_ANGLE,
       EGL_TRUE,
+
+      // This extension allows angle to render directly on a D3D swapchain
+      // in the correct orientation on D3D11.
+      EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE,
+      EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE,
+
       EGL_NONE,
   };
 
@@ -118,20 +123,10 @@ bool AngleSurfaceManager::Initialize() {
       EGL_NONE,
   };
 
-  // These are used to request ANGLE's D3D9 renderer as a fallback if D3D11
-  // is not available.
-  const EGLint d3d9_display_attributes[] = {
-      EGL_PLATFORM_ANGLE_TYPE_ANGLE,
-      EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE,
-      EGL_TRUE,
-      EGL_NONE,
-  };
-
   std::vector<const EGLint*> display_attributes_configs = {
       d3d11_display_attributes,
       d3d11_fl_9_3_display_attributes,
       d3d11_warp_display_attributes,
-      d3d9_display_attributes,
   };
 
   PFNEGLGETPLATFORMDISPLAYEXTPROC egl_get_platform_display_EXT =
@@ -143,7 +138,7 @@ bool AngleSurfaceManager::Initialize() {
   }
 
   // Attempt to initialize ANGLE's renderer in order of: D3D11, D3D11 Feature
-  // Level 9_3, D3D11 WARP and finally D3D9.
+  // Level 9_3 and finally D3D11 WARP.
   for (auto config : display_attributes_configs) {
     bool should_log = (config == display_attributes_configs.back());
     if (InitializeEGL(egl_get_platform_display_EXT, config, should_log)) {
@@ -180,6 +175,9 @@ bool AngleSurfaceManager::Initialize() {
 void AngleSurfaceManager::CleanUp() {
   EGLBoolean result = EGL_FALSE;
 
+  // Needs to be reset before destroying the EGLContext.
+  resolved_device_.Reset();
+
   if (egl_display_ != EGL_NO_DISPLAY && egl_context_ != EGL_NO_CONTEXT) {
     result = eglDestroyContext(egl_display_, egl_context_);
     egl_context_ = EGL_NO_CONTEXT;
@@ -200,60 +198,62 @@ void AngleSurfaceManager::CleanUp() {
   }
 
   if (egl_display_ != EGL_NO_DISPLAY) {
-    eglTerminate(egl_display_);
+    // Display is reused between instances so only terminate display
+    // if destroying last instance
+    if (instance_count_ == 1) {
+      eglTerminate(egl_display_);
+    }
     egl_display_ = EGL_NO_DISPLAY;
   }
 }
 
 bool AngleSurfaceManager::CreateSurface(WindowsRenderTarget* render_target,
                                         EGLint width,
-                                        EGLint height) {
+                                        EGLint height,
+                                        bool vsync_enabled) {
   if (!render_target || !initialize_succeeded_) {
     return false;
   }
 
   EGLSurface surface = EGL_NO_SURFACE;
 
-  const EGLint surfaceAttributes[] = {EGL_NONE};
+  const EGLint surfaceAttributes[] = {
+      EGL_FIXED_SIZE_ANGLE, EGL_TRUE, EGL_WIDTH, width,
+      EGL_HEIGHT,           height,   EGL_NONE};
 
-#ifdef WINUWP
-#ifdef USECOREWINDOW
-  auto target = std::get<winrt::Windows::UI::Core::CoreWindow>(*render_target);
-#else
-  auto target =
-      std::get<winrt::Windows::UI::Composition::SpriteVisual>(*render_target);
-#endif
-  surface = eglCreateWindowSurface(
-      egl_display_, egl_config_,
-      static_cast<EGLNativeWindowType>(winrt::get_abi(target)),
-      surfaceAttributes);
-#else
   surface = eglCreateWindowSurface(
       egl_display_, egl_config_,
       static_cast<EGLNativeWindowType>(std::get<HWND>(*render_target)),
       surfaceAttributes);
-#endif
   if (surface == EGL_NO_SURFACE) {
     LogEglError("Surface creation failed.");
+    return false;
   }
 
   surface_width_ = width;
   surface_height_ = height;
   render_surface_ = surface;
+
+  SetVSyncEnabled(vsync_enabled);
   return true;
 }
 
 void AngleSurfaceManager::ResizeSurface(WindowsRenderTarget* render_target,
                                         EGLint width,
-                                        EGLint height) {
+                                        EGLint height,
+                                        bool vsync_enabled) {
   EGLint existing_width, existing_height;
   GetSurfaceDimensions(&existing_width, &existing_height);
   if (width != existing_width || height != existing_height) {
-    // Resize render_surface_.  Internaly this calls mSwapChain->ResizeBuffers
-    // avoiding the need to destory and recreate the underlying SwapChain.
     surface_width_ = width;
     surface_height_ = height;
-    eglPostSubBufferNV(egl_display_, render_surface_, 1, 1, width, height);
+
+    ClearContext();
+    DestroySurface();
+    if (!CreateSurface(render_target, width, height, vsync_enabled)) {
+      FML_LOG(ERROR)
+          << "AngleSurfaceManager::ResizeSurface failed to create surface";
+    }
   }
 }
 
@@ -295,6 +295,62 @@ bool AngleSurfaceManager::MakeResourceCurrent() {
 
 EGLBoolean AngleSurfaceManager::SwapBuffers() {
   return (eglSwapBuffers(egl_display_, render_surface_));
+}
+
+EGLSurface AngleSurfaceManager::CreateSurfaceFromHandle(
+    EGLenum handle_type,
+    EGLClientBuffer handle,
+    const EGLint* attributes) const {
+  return eglCreatePbufferFromClientBuffer(egl_display_, handle_type, handle,
+                                          egl_config_, attributes);
+}
+
+void AngleSurfaceManager::SetVSyncEnabled(bool enabled) {
+  if (eglMakeCurrent(egl_display_, render_surface_, render_surface_,
+                     egl_context_) != EGL_TRUE) {
+    LogEglError("Unable to make surface current to update the swap interval");
+    return;
+  }
+
+  // OpenGL swap intervals can be used to prevent screen tearing.
+  // If enabled, the raster thread blocks until the v-blank.
+  // This is unnecessary if DWM composition is enabled.
+  // See: https://www.khronos.org/opengl/wiki/Swap_Interval
+  // See: https://learn.microsoft.com/windows/win32/dwm/composition-ovw
+  if (eglSwapInterval(egl_display_, enabled ? 1 : 0) != EGL_TRUE) {
+    LogEglError("Unable to update the swap interval");
+    return;
+  }
+}
+
+bool AngleSurfaceManager::GetDevice(ID3D11Device** device) {
+  if (!resolved_device_) {
+    PFNEGLQUERYDISPLAYATTRIBEXTPROC egl_query_display_attrib_EXT =
+        reinterpret_cast<PFNEGLQUERYDISPLAYATTRIBEXTPROC>(
+            eglGetProcAddress("eglQueryDisplayAttribEXT"));
+
+    PFNEGLQUERYDEVICEATTRIBEXTPROC egl_query_device_attrib_EXT =
+        reinterpret_cast<PFNEGLQUERYDEVICEATTRIBEXTPROC>(
+            eglGetProcAddress("eglQueryDeviceAttribEXT"));
+
+    if (!egl_query_display_attrib_EXT || !egl_query_device_attrib_EXT) {
+      return false;
+    }
+
+    EGLAttrib egl_device = 0;
+    EGLAttrib angle_device = 0;
+    if (egl_query_display_attrib_EXT(egl_display_, EGL_DEVICE_EXT,
+                                     &egl_device) == EGL_TRUE) {
+      if (egl_query_device_attrib_EXT(
+              reinterpret_cast<EGLDeviceEXT>(egl_device),
+              EGL_D3D11_DEVICE_ANGLE, &angle_device) == EGL_TRUE) {
+        resolved_device_ = reinterpret_cast<ID3D11Device*>(angle_device);
+      }
+    }
+  }
+
+  resolved_device_.CopyTo(device);
+  return (resolved_device_ != nullptr);
 }
 
 }  // namespace flutter

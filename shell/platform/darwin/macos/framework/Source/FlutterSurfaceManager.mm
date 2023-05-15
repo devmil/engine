@@ -5,156 +5,202 @@
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterSurfaceManager.h"
 
 #import <Metal/Metal.h>
-#import <OpenGL/gl.h>
 
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterFrameBufferProvider.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterIOSurfaceHolder.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/MacOSGLContextSwitch.h"
+#include <algorithm>
 
-enum {
-  kFlutterSurfaceManagerFrontBuffer = 0,
-  kFlutterSurfaceManagerBackBuffer = 1,
-  kFlutterSurfaceManagerBufferCount,
-};
+#include "flutter/fml/logging.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterSurface.h"
 
-@implementation FlutterIOSurfaceManager {
-  CALayer* _containingLayer;  // provided (parent layer)
-  CALayer* _contentLayer;
-  CATransform3D _contentTransform;
-
-  CGSize _surfaceSize;
-  FlutterIOSurfaceHolder* _ioSurfaces[kFlutterSurfaceManagerBufferCount];
-}
-
-- (instancetype)initWithLayer:(CALayer*)containingLayer contentTransform:(CATransform3D)transform {
-  self = [super init];
-  if (self) {
-    _containingLayer = containingLayer;
-    _contentTransform = transform;
-    _contentLayer = [[CALayer alloc] init];
-    [_containingLayer addSublayer:_contentLayer];
-
-    _ioSurfaces[0] = [[FlutterIOSurfaceHolder alloc] init];
-    _ioSurfaces[1] = [[FlutterIOSurfaceHolder alloc] init];
-  }
-  return self;
-}
-
-- (void)ensureSurfaceSize:(CGSize)size {
-  if (CGSizeEqualToSize(size, _surfaceSize)) {
-    return;
-  }
-  _surfaceSize = size;
-  for (int i = 0; i < kFlutterSurfaceManagerBufferCount; ++i) {
-    [_ioSurfaces[i] recreateIOSurfaceWithSize:size];
-    [_delegate onUpdateSurface:_ioSurfaces[i] bufferIndex:i size:size];
-  }
-}
-
-- (void)swapBuffers {
-  _contentLayer.frame = _containingLayer.bounds;
-  _contentLayer.transform = _contentTransform;
-  IOSurfaceRef contentIOSurface = [_ioSurfaces[kFlutterSurfaceManagerBackBuffer] ioSurface];
-  [_contentLayer setContents:(__bridge id)contentIOSurface];
-
-  std::swap(_ioSurfaces[kFlutterSurfaceManagerBackBuffer],
-            _ioSurfaces[kFlutterSurfaceManagerFrontBuffer]);
-  [_delegate onSwapBuffers];
-}
-
-- (nonnull FlutterRenderBackingStore*)renderBuffer {
-  @throw([NSException exceptionWithName:@"Sub-classes FlutterIOSurfaceManager of"
-                                         " must override renderBuffer."
-                                 reason:nil
-                               userInfo:nil]);
-}
-
+@implementation FlutterSurfacePresentInfo
 @end
 
-@implementation FlutterGLSurfaceManager {
-  NSOpenGLContext* _openGLContext;
-
-  FlutterFrameBufferProvider* _frameBuffers[kFlutterSurfaceManagerBufferCount];
-}
-
-- (instancetype)initWithLayer:(CALayer*)containingLayer
-                openGLContext:(NSOpenGLContext*)openGLContext {
-  self = [super initWithLayer:containingLayer contentTransform:CATransform3DMakeScale(1, -1, 1)];
-
-  if (self) {
-    super.delegate = self;
-    _openGLContext = openGLContext;
-
-    _frameBuffers[0] = [[FlutterFrameBufferProvider alloc] initWithOpenGLContext:_openGLContext];
-    _frameBuffers[1] = [[FlutterFrameBufferProvider alloc] initWithOpenGLContext:_openGLContext];
-  }
-  return self;
-}
-
-- (FlutterRenderBackingStore*)renderBuffer {
-  uint32_t fboID = [_frameBuffers[kFlutterSurfaceManagerBackBuffer] glFrameBufferId];
-  return [[FlutterOpenGLRenderBackingStore alloc] initWithFrameBufferID:fboID];
-}
-
-- (void)onSwapBuffers {
-  std::swap(_frameBuffers[kFlutterSurfaceManagerBackBuffer],
-            _frameBuffers[kFlutterSurfaceManagerFrontBuffer]);
-}
-
-- (void)onUpdateSurface:(FlutterIOSurfaceHolder*)surface
-            bufferIndex:(size_t)index
-                   size:(CGSize)size {
-  MacOSGLContextSwitch context_switch(_openGLContext);
-  GLuint fbo = [_frameBuffers[index] glFrameBufferId];
-  GLuint texture = [_frameBuffers[index] glTextureId];
-  [surface bindSurfaceToTexture:texture fbo:fbo size:size];
-}
-
-@end
-
-@implementation FlutterMetalSurfaceManager {
+@interface FlutterSurfaceManager () {
   id<MTLDevice> _device;
   id<MTLCommandQueue> _commandQueue;
+  CALayer* _containingLayer;
+  __weak id<FlutterSurfaceManagerDelegate> _delegate;
 
-  id<MTLTexture> _textures[kFlutterSurfaceManagerBufferCount];
+  // Available (cached) back buffer surfaces. These will be cleared during
+  // present and replaced by current frong surfaces.
+  FlutterBackBufferCache* _backBufferCache;
+
+  // Surfaces currently used to back visible layers.
+  NSMutableArray<FlutterSurface*>* _frontSurfaces;
+
+  // Currently visible layers.
+  NSMutableArray<CALayer*>* _layers;
 }
 
-- (nullable instancetype)initWithDevice:(nonnull id<MTLDevice>)device
-                           commandQueue:(nonnull id<MTLCommandQueue>)commandQueue
-                             metalLayer:(nonnull CAMetalLayer*)layer {
-  self = [super initWithLayer:layer contentTransform:CATransform3DIdentity];
-  if (self) {
-    super.delegate = self;
+/**
+ * Updates underlying CALayers with the contents of the surfaces to present.
+ */
+- (void)commit:(NSArray<FlutterSurfacePresentInfo*>*)surfaces;
+
+@end
+
+@implementation FlutterSurfaceManager
+
+- (instancetype)initWithDevice:(id<MTLDevice>)device
+                  commandQueue:(id<MTLCommandQueue>)commandQueue
+                         layer:(CALayer*)containingLayer
+                      delegate:(__weak id<FlutterSurfaceManagerDelegate>)delegate {
+  if (self = [super init]) {
     _device = device;
     _commandQueue = commandQueue;
+    _containingLayer = containingLayer;
+    _delegate = delegate;
+
+    _backBufferCache = [[FlutterBackBufferCache alloc] init];
+    _frontSurfaces = [NSMutableArray array];
+    _layers = [NSMutableArray array];
   }
   return self;
 }
 
-- (FlutterRenderBackingStore*)renderBuffer {
-  id<MTLTexture> texture = _textures[kFlutterSurfaceManagerBackBuffer];
-  return [[FlutterMetalRenderBackingStore alloc] initWithTexture:texture];
+- (FlutterBackBufferCache*)backBufferCache {
+  return _backBufferCache;
 }
 
-- (void)onSwapBuffers {
-  std::swap(_textures[kFlutterSurfaceManagerBackBuffer],
-            _textures[kFlutterSurfaceManagerFrontBuffer]);
+- (NSArray*)frontSurfaces {
+  return _frontSurfaces;
 }
 
-- (void)onUpdateSurface:(FlutterIOSurfaceHolder*)surface
-            bufferIndex:(size_t)index
-                   size:(CGSize)size {
-  MTLTextureDescriptor* textureDescriptor =
-      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                         width:size.width
-                                                        height:size.height
-                                                     mipmapped:NO];
-  textureDescriptor.usage =
-      MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite;
-  // plane = 0 for BGRA.
-  _textures[index] = [_device newTextureWithDescriptor:textureDescriptor
-                                             iosurface:[surface ioSurface]
-                                                 plane:0];
+- (NSArray*)layers {
+  return _layers;
+}
+
+- (FlutterSurface*)surfaceForSize:(CGSize)size {
+  FlutterSurface* surface = [_backBufferCache removeSurfaceForSize:size];
+  if (surface == nil) {
+    surface = [[FlutterSurface alloc] initWithSize:size device:_device];
+  }
+  return surface;
+}
+
+- (void)commit:(NSArray<FlutterSurfacePresentInfo*>*)surfaces {
+  FML_DCHECK([NSThread isMainThread]);
+
+  // Release all unused back buffer surfaces and replace them with front surfaces.
+  [_backBufferCache replaceSurfaces:_frontSurfaces];
+
+  // Front surfaces will be replaced by currently presented surfaces.
+  [_frontSurfaces removeAllObjects];
+  for (FlutterSurfacePresentInfo* info in surfaces) {
+    [_frontSurfaces addObject:info.surface];
+  }
+
+  // Add or remove layers to match the count of surfaces to present.
+  while (_layers.count > _frontSurfaces.count) {
+    [_layers.lastObject removeFromSuperlayer];
+    [_layers removeLastObject];
+  }
+  while (_layers.count < _frontSurfaces.count) {
+    CALayer* layer = [CALayer layer];
+    [_containingLayer addSublayer:layer];
+    [_layers addObject:layer];
+  }
+
+  // Update contents of surfaces.
+  for (size_t i = 0; i < surfaces.count; ++i) {
+    FlutterSurfacePresentInfo* info = surfaces[i];
+    CALayer* layer = _layers[i];
+    CGFloat scale = _containingLayer.contentsScale;
+    layer.frame = CGRectMake(info.offset.x / scale, info.offset.y / scale,
+                             info.surface.size.width / scale, info.surface.size.height / scale);
+    layer.contents = (__bridge id)info.surface.ioSurface;
+    layer.zPosition = info.zIndex;
+  }
+}
+
+static CGSize GetRequiredFrameSize(NSArray<FlutterSurfacePresentInfo*>* surfaces) {
+  CGSize size = CGSizeZero;
+  for (FlutterSurfacePresentInfo* info in surfaces) {
+    size = CGSizeMake(std::max(size.width, info.offset.x + info.surface.size.width),
+                      std::max(size.height, info.offset.y + info.surface.size.height));
+  }
+  return size;
+}
+
+- (void)present:(NSArray<FlutterSurfacePresentInfo*>*)surfaces notify:(dispatch_block_t)notify {
+  id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+  [commandBuffer commit];
+  [commandBuffer waitUntilScheduled];
+
+  // Get the actual dimensions of the frame (relevant for thread synchronizer).
+  CGSize size = GetRequiredFrameSize(surfaces);
+
+  [_delegate onPresent:size
+             withBlock:^{
+               [self commit:surfaces];
+               if (notify != nil) {
+                 notify();
+               }
+             }];
+}
+
+@end
+
+// Cached back buffers will be released after kIdleDelay if there is no activity.
+static const double kIdleDelay = 1.0;
+
+@interface FlutterBackBufferCache () {
+  NSMutableArray<FlutterSurface*>* _surfaces;
+}
+
+@end
+
+@implementation FlutterBackBufferCache
+
+- (instancetype)init {
+  if (self = [super init]) {
+    self->_surfaces = [[NSMutableArray alloc] init];
+  }
+  return self;
+}
+
+- (nullable FlutterSurface*)removeSurfaceForSize:(CGSize)size {
+  @synchronized(self) {
+    for (FlutterSurface* surface in _surfaces) {
+      if (CGSizeEqualToSize(surface.size, size)) {
+        // By default ARC doesn't retain enumeration iteration variables.
+        FlutterSurface* res = surface;
+        [_surfaces removeObject:surface];
+        return res;
+      }
+    }
+    return nil;
+  }
+}
+
+- (void)replaceSurfaces:(nonnull NSArray<FlutterSurface*>*)surfaces {
+  @synchronized(self) {
+    [_surfaces removeAllObjects];
+    [_surfaces addObjectsFromArray:surfaces];
+  }
+
+  // performSelector:withObject:afterDelay needs to be performed on RunLoop thread
+  [self performSelectorOnMainThread:@selector(reschedule) withObject:nil waitUntilDone:NO];
+}
+
+- (NSUInteger)count {
+  @synchronized(self) {
+    return _surfaces.count;
+  }
+}
+
+- (void)onIdle {
+  @synchronized(self) {
+    [_surfaces removeAllObjects];
+  }
+}
+
+- (void)reschedule {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(onIdle) object:nil];
+  [self performSelector:@selector(onIdle) withObject:nil afterDelay:kIdleDelay];
+}
+
+- (void)dealloc {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(onIdle) object:nil];
 }
 
 @end

@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:ui/ui.dart' as ui;
+
+import '../vector_math.dart';
+import 'canvaskit_api.dart';
+import 'path.dart';
 
 /// An error related to the CanvasKit rendering backend.
 class CanvasKitError extends Error {
@@ -27,9 +33,10 @@ Float32List makeFreshSkColor(ui.Color color) {
 }
 
 ui.TextPosition fromPositionWithAffinity(SkTextPosition positionWithAffinity) {
-  final ui.TextAffinity affinity = ui.TextAffinity.values[positionWithAffinity.affinity.value];
+  final ui.TextAffinity affinity =
+      ui.TextAffinity.values[positionWithAffinity.affinity.value.toInt()];
   return ui.TextPosition(
-    offset: positionWithAffinity.pos,
+    offset: positionWithAffinity.pos.toInt(),
     affinity: affinity,
   );
 }
@@ -54,10 +61,12 @@ class SkiaShadowFlags {
   static const int kDirectionalLight_ShadowFlag = 0x04;
 
   /// Complete value for the `flags` argument for opaque occluder.
-  static const int kDefaultShadowFlags = kDirectionalLight_ShadowFlag | kNone_ShadowFlag;
+  static const int kDefaultShadowFlags =
+      kDirectionalLight_ShadowFlag | kNone_ShadowFlag;
 
   /// Complete value for the `flags` argument for transparent occluder.
-  static const int kTransparentOccluderShadowFlags = kDirectionalLight_ShadowFlag | kTransparentOccluder_ShadowFlag;
+  static const int kTransparentOccluderShadowFlags =
+      kDirectionalLight_ShadowFlag | kTransparentOccluder_ShadowFlag;
 }
 
 // These numbers have been chosen empirically to give a result closest to the
@@ -99,7 +108,7 @@ ui.Rect computeSkShadowBounds(
   // one matrix inverse.
   final bool isComplex = !matrix.isIdentityOrTranslation();
   if (isComplex) {
-    pathBounds = transformRect(matrix, pathBounds);
+    pathBounds = matrix.transformRect(pathBounds);
   }
 
   double left = pathBounds.left;
@@ -116,7 +125,8 @@ ui.Rect computeSkShadowBounds(
   left = left - 1 + (spotOffsetX - ambientBlur - spotBlur) * devicePixelRatio;
   top = top - 1 + (spotOffsetY - ambientBlur - spotBlur) * devicePixelRatio;
   right = right + 1 + (spotOffsetX + ambientBlur + spotBlur) * devicePixelRatio;
-  bottom = bottom + 1 + (spotOffsetY + ambientBlur + spotBlur) * devicePixelRatio;
+  bottom =
+      bottom + 1 + (spotOffsetY + ambientBlur + spotBlur) * devicePixelRatio;
 
   final ui.Rect shadowBounds = ui.Rect.fromLTRB(left, top, right, bottom);
 
@@ -124,7 +134,7 @@ ui.Rect computeSkShadowBounds(
     final Matrix4 inverse = Matrix4.zero();
     // The inverse only makes sense if the determinat is non-zero.
     if (inverse.copyInverse(matrix) != 0.0) {
-      return transformRect(inverse, shadowBounds);
+      return inverse.transformRect(shadowBounds);
     } else {
       return shadowBounds;
     }
@@ -135,10 +145,12 @@ ui.Rect computeSkShadowBounds(
 
 const double kAmbientHeightFactor = 1.0 / 128.0;
 const double kAmbientGeomFactor = 64.0;
-const double kMaxAmbientRadius = 300 * kAmbientHeightFactor * kAmbientGeomFactor;
+const double kMaxAmbientRadius =
+    300 * kAmbientHeightFactor * kAmbientGeomFactor;
 
 double ambientBlurRadius(double height) {
-  return math.min(height * kAmbientHeightFactor * kAmbientGeomFactor, kMaxAmbientRadius);
+  return math.min(
+      height * kAmbientHeightFactor * kAmbientGeomFactor, kMaxAmbientRadius);
 }
 
 void drawSkShadow(
@@ -150,24 +162,23 @@ void drawSkShadow(
   double devicePixelRatio,
 ) {
   final int flags = transparentOccluder
-    ? SkiaShadowFlags.kTransparentOccluderShadowFlags
-    : SkiaShadowFlags.kDefaultShadowFlags;
+      ? SkiaShadowFlags.kTransparentOccluderShadowFlags
+      : SkiaShadowFlags.kDefaultShadowFlags;
 
-  ui.Color inAmbient = color.withAlpha((color.alpha * ckShadowAmbientAlpha).round());
-  ui.Color inSpot = color.withAlpha((color.alpha * ckShadowSpotAlpha).round());
+  final ui.Color inAmbient =
+      color.withAlpha((color.alpha * ckShadowAmbientAlpha).round());
+  final ui.Color inSpot = color.withAlpha((color.alpha * ckShadowSpotAlpha).round());
 
   final SkTonalColors inTonalColors = SkTonalColors(
     ambient: makeFreshSkColor(inAmbient),
     spot: makeFreshSkColor(inSpot),
   );
 
-  final SkTonalColors tonalColors =
-      canvasKit.computeTonalColors(inTonalColors);
+  final SkTonalColors tonalColors = canvasKit.computeTonalColors(inTonalColors);
 
   skCanvas.drawShadow(
     path.skiaObject,
-    Float32List(3)
-      ..[2] = devicePixelRatio * elevation,
+    Float32List(3)..[2] = devicePixelRatio * elevation,
     Float32List(3)
       ..[0] = ckShadowLightXOffset
       ..[1] = ckShadowLightYOffset
@@ -175,6 +186,6 @@ void drawSkShadow(
     devicePixelRatio * ckShadowLightRadius,
     tonalColors.ambient,
     tonalColors.spot,
-    flags,
+    flags.toDouble(),
   );
 }

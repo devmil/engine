@@ -12,9 +12,7 @@
 #include "flutter/flow/embedded_views.h"
 #include "flutter/fml/hash_combine.h"
 #include "flutter/fml/macros.h"
-#include "flutter/shell/common/canvas_spy.h"
 #include "flutter/shell/platform/embedder/embedder_render_target.h"
-#include "third_party/skia/include/core/SkPictureRecorder.h"
 
 namespace flutter {
 
@@ -26,7 +24,8 @@ class EmbedderExternalView {
 
     ViewIdentifier() {}
 
-    ViewIdentifier(PlatformViewID view_id) : platform_view_id(view_id) {}
+    explicit ViewIdentifier(PlatformViewID view_id)
+        : platform_view_id(view_id) {}
 
     struct Hash {
       constexpr std::size_t operator()(const ViewIdentifier& desc) const {
@@ -96,7 +95,7 @@ class EmbedderExternalView {
 
   bool HasPlatformView() const;
 
-  bool HasEngineRenderedContents() const;
+  bool HasEngineRenderedContents();
 
   ViewIdentifier GetViewIdentifier() const;
 
@@ -104,19 +103,23 @@ class EmbedderExternalView {
 
   RenderTargetDescriptor CreateRenderTargetDescriptor() const;
 
-  SkCanvas* GetCanvas() const;
+  DlCanvas* GetCanvas();
 
   SkISize GetRenderSurfaceSize() const;
 
   bool Render(const EmbedderRenderTarget& render_target);
 
  private:
+  // End the recording of the slice.
+  // Noop if the slice's recording has already ended.
+  void TryEndRecording() const;
+
   const SkISize render_surface_size_;
   const SkMatrix surface_transformation_;
   ViewIdentifier view_identifier_;
   std::unique_ptr<EmbeddedViewParams> embedded_view_params_;
-  std::unique_ptr<SkPictureRecorder> recorder_;
-  std::unique_ptr<CanvasSpy> canvas_spy_;
+  std::unique_ptr<DisplayListEmbedderViewSlice> slice_;
+  std::optional<bool> has_engine_rendered_contents_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(EmbedderExternalView);
 };

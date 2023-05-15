@@ -16,6 +16,8 @@
 namespace flutter {
 namespace testing {
 
+const char* GetSourcePath();
+
 //------------------------------------------------------------------------------
 /// @brief      Returns the directory containing the test fixture for the target
 ///             if this target has fixtures configured. If there are no
@@ -26,6 +28,21 @@ namespace testing {
 /// @return     The fixtures path.
 ///
 const char* GetFixturesPath();
+
+//------------------------------------------------------------------------------
+/// @brief      Returns the directory containing assets shared across all tests.
+///
+/// @return     The testing assets path.
+///
+const char* GetTestingAssetsPath();
+
+//------------------------------------------------------------------------------
+/// @brief      Returns the default path to kernel_blob.bin. This file is within
+///             the directory returned by `GetFixturesPath()`.
+///
+/// @return     The kernel file path.
+///
+std::string GetDefaultKernelFilePath();
 
 //------------------------------------------------------------------------------
 /// @brief      Opens the fixtures directory for the unit-test harness.
@@ -42,7 +59,7 @@ fml::UniqueFD OpenFixturesDirectory();
 /// @return     The file descriptor of the given fixture. An invalid file
 ///             descriptor is returned in case the fixture is not found.
 ///
-fml::UniqueFD OpenFixture(std::string fixture_name);
+fml::UniqueFD OpenFixture(const std::string& fixture_name);
 
 //------------------------------------------------------------------------------
 /// @brief      Opens a fixture of the given file name and returns a mapping to
@@ -53,7 +70,8 @@ fml::UniqueFD OpenFixture(std::string fixture_name);
 /// @return     A mapping to the contents of fixture or null if the fixture does
 ///             not exist or its contents cannot be mapped in.
 ///
-std::unique_ptr<fml::Mapping> OpenFixtureAsMapping(std::string fixture_name);
+std::unique_ptr<fml::Mapping> OpenFixtureAsMapping(
+    const std::string& fixture_name);
 
 //------------------------------------------------------------------------------
 /// @brief      Gets the name of the currently running test. This is useful in

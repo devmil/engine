@@ -4,13 +4,18 @@
 
 #include "vulkan_swapchain.h"
 
+#include "flutter/vulkan/procs/vulkan_proc_table.h"
+
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/gpu/GrBackendSurface.h"
 #include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/vk/GrVkTypes.h"
+
 #include "vulkan_backbuffer.h"
 #include "vulkan_device.h"
 #include "vulkan_image.h"
-#include "vulkan_proc_table.h"
 #include "vulkan_surface.h"
 
 namespace vulkan {
@@ -147,11 +152,11 @@ VulkanSwapchain::VulkanSwapchain(const VulkanProcTable& p_vk,
     return;
   }
 
-  swapchain_ = {swapchain, [this](VkSwapchainKHR swapchain) {
-                  FML_ALLOW_UNUSED_LOCAL(device_.WaitIdle());
-                  vk.DestroySwapchainKHR(device_.GetHandle(), swapchain,
-                                         nullptr);
-                }};
+  swapchain_ = VulkanHandle<VkSwapchainKHR>{
+      swapchain, [this](VkSwapchainKHR swapchain) {
+        FML_ALLOW_UNUSED_LOCAL(device_.WaitIdle());
+        vk.DestroySwapchainKHR(device_.GetHandle(), swapchain, nullptr);
+      }};
 
   if (!CreateSwapchainImages(
           skia_context, format_infos[format_index].color_type_,
@@ -251,13 +256,14 @@ sk_sp<SkSurface> VulkanSwapchain::CreateSkiaSurface(
   );
 }
 
-bool VulkanSwapchain::CreateSwapchainImages(GrDirectContext* skia_context,
-                                            SkColorType color_type,
-                                            sk_sp<SkColorSpace> color_space,
-                                            VkImageUsageFlags usage_flags) {
+bool VulkanSwapchain::CreateSwapchainImages(
+    GrDirectContext* skia_context,
+    SkColorType color_type,
+    const sk_sp<SkColorSpace>& color_space,
+    VkImageUsageFlags usage_flags) {
   std::vector<VkImage> images = GetImages();
 
-  if (images.size() == 0) {
+  if (images.empty()) {
     return false;
   }
 
@@ -275,7 +281,11 @@ bool VulkanSwapchain::CreateSwapchainImages(GrDirectContext* skia_context,
     backbuffers_.emplace_back(std::move(backbuffer));
 
     // Populate the image.
-    auto vulkan_image = std::make_unique<VulkanImage>(image);
+    VulkanHandle<VkImage> image_handle = VulkanHandle<VkImage>{
+        image, [this](VkImage image) {
+          vk.DestroyImage(device_.GetHandle(), image, nullptr);
+        }};
+    auto vulkan_image = std::make_unique<VulkanImage>(std::move(image_handle));
 
     if (!vulkan_image->IsValid()) {
       return false;
@@ -350,7 +360,7 @@ VulkanSwapchain::AcquireResult VulkanSwapchain::AcquireSurface() {
 
   // ---------------------------------------------------------------------------
   // Step 2:
-  // Put semaphores in unsignaled state.
+  // Put fences in an unsignaled state.
   // ---------------------------------------------------------------------------
   if (!backbuffer->ResetFences()) {
     FML_DLOG(INFO) << "Could not reset fences.";
@@ -467,8 +477,8 @@ VulkanSwapchain::AcquireResult VulkanSwapchain::AcquireSurface() {
     return error;
   }
 
-  GrBackendRenderTarget backendRT = surface->getBackendRenderTarget(
-      SkSurface::kFlushRead_BackendHandleAccess);
+  GrBackendRenderTarget backendRT = SkSurfaces::GetBackendRenderTarget(
+      surface.get(), SkSurfaces::BackendHandleAccess::kFlushRead);
   if (!backendRT.isValid()) {
     FML_DLOG(INFO) << "Could not get backend render target.";
     return error;

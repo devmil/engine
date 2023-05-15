@@ -10,7 +10,6 @@
 #include "flutter/fml/macros.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "third_party/skia/include/gpu/mtl/GrMtlTypes.h"
 
 namespace flutter {
 
@@ -26,9 +25,13 @@ typedef void* GPUCAMetalLayerHandle;
 // expected to be id<MTLTexture>
 typedef const void* GPUMTLTextureHandle;
 
+typedef void (*GPUMTLDestructionCallback)(void* /* destruction_context */);
+
 struct GPUMTLTextureInfo {
   int64_t texture_id;
   GPUMTLTextureHandle texture;
+  GPUMTLDestructionCallback destruction_callback;
+  void* destruction_context;
 };
 
 enum class MTLRenderTargetType { kMTLTexture, kCAMetalLayer };
@@ -59,7 +62,7 @@ class GPUSurfaceMetalDelegate {
 
   //------------------------------------------------------------------------------
   /// @brief Returns the handle to the CAMetalLayer to render to. This is only
-  /// called when the specifed render target type is `kCAMetalLayer`.
+  /// called when the specified render target type is `kCAMetalLayer`.
   ///
   virtual GPUCAMetalLayerHandle GetCAMetalLayer(
       const SkISize& frame_info) const = 0;
@@ -75,19 +78,24 @@ class GPUSurfaceMetalDelegate {
 
   //------------------------------------------------------------------------------
   /// @brief Returns the handle to the MTLTexture to render to. This is only
-  /// called when the specefied render target type is `kMTLTexture`.
+  /// called when the specified render target type is `kMTLTexture`.
   ///
   virtual GPUMTLTextureInfo GetMTLTexture(const SkISize& frame_info) const = 0;
 
   //------------------------------------------------------------------------------
   /// @brief Presents the texture with `texture_id` to the "screen".
   /// `texture_id` corresponds to a texture that has been obtained by an earlier
-  /// call to `GetMTLTexture`. This is only called when the specefied render
+  /// call to `GetMTLTexture`. This is only called when the specified render
   /// target type is `kMTLTexture`.
   ///
   /// @see |GPUSurfaceMetalDelegate::GetMTLTexture|
   ///
   virtual bool PresentTexture(GPUMTLTextureInfo texture) const = 0;
+
+  //------------------------------------------------------------------------------
+  /// @brief Whether to allow drawing to the surface when the GPU is disabled
+  ///
+  virtual bool AllowsDrawingWhenGpuDisabled() const;
 
   MTLRenderTargetType GetRenderTargetType();
 

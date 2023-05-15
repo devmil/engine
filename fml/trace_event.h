@@ -47,7 +47,7 @@
 #include "flutter/fml/time/time_point.h"
 #include "third_party/dart/runtime/include/dart_tools_api.h"
 
-#if (FLUTTER_RELEASE && !defined(OS_FUCHSIA))
+#if (FLUTTER_RELEASE && !defined(OS_FUCHSIA) && !defined(FML_OS_ANDROID))
 #define FLUTTER_TIMELINE_ENABLED 0
 #else
 #define FLUTTER_TIMELINE_ENABLED 1
@@ -139,6 +139,13 @@
 #endif  // TRACE_EVENT_HIDE_MACROS
 #endif  // !defined(OS_FUCHSIA)
 
+#define TRACE_EVENT2_INT(category_group, name, arg1_name, arg1_val, arg2_name, \
+                         arg2_val)                                             \
+  const auto __arg1_val_str = std::to_string(arg1_val);                        \
+  const auto __arg2_val_str = std::to_string(arg2_val);                        \
+  TRACE_EVENT2(category_group, name, arg1_name, __arg1_val_str.c_str(),        \
+               arg2_name, __arg2_val_str.c_str());
+
 namespace fml {
 namespace tracing {
 
@@ -147,15 +154,23 @@ using TraceIDArg = int64_t;
 
 void TraceSetAllowlist(const std::vector<std::string>& allowlist);
 
-using TimelineEventHandler = std::function<void(const char*,
-                                                int64_t,
-                                                int64_t,
-                                                Dart_Timeline_Event_Type,
-                                                intptr_t,
-                                                const char**,
-                                                const char**)>;
+typedef void (*TimelineEventHandler)(const char*,
+                                     int64_t,
+                                     int64_t,
+                                     Dart_Timeline_Event_Type,
+                                     intptr_t,
+                                     const char**,
+                                     const char**);
+
+using TimelineMicrosSource = int64_t (*)();
 
 void TraceSetTimelineEventHandler(TimelineEventHandler handler);
+
+bool TraceHasTimelineEventHandler();
+
+void TraceSetTimelineMicrosSource(TimelineMicrosSource source);
+
+int64_t TraceGetTimelineMicros();
 
 void TraceTimelineEvent(TraceArg category_group,
                         TraceArg name,
@@ -343,7 +358,7 @@ void TraceEventFlowEnd0(TraceArg category_group, TraceArg name, TraceIDArg id);
 
 class ScopedInstantEnd {
  public:
-  ScopedInstantEnd(const char* str) : label_(str) {}
+  explicit ScopedInstantEnd(const char* str) : label_(str) {}
 
   ~ScopedInstantEnd() { TraceEventEnd(label_); }
 
@@ -360,7 +375,7 @@ class ScopedInstantEnd {
 // leads to corrupted or missing traces in the UI.
 class TraceFlow {
  public:
-  TraceFlow(const char* label) : label_(label), nonce_(TraceNonce()) {
+  explicit TraceFlow(const char* label) : label_(label), nonce_(TraceNonce()) {
     TraceEventFlowBegin0("flutter", label_, nonce_);
   }
 
@@ -370,13 +385,13 @@ class TraceFlow {
     other.nonce_ = 0;
   }
 
-  void Step(const char* label) const {
-    TraceEventFlowStep0("flutter", label, nonce_);
+  void Step(const char* label = nullptr) const {
+    TraceEventFlowStep0("flutter", label ? label : label_, nonce_);
   }
 
   void End(const char* label = nullptr) {
     if (nonce_ != 0) {
-      TraceEventFlowEnd0("flutter", label == nullptr ? label_ : label, nonce_);
+      TraceEventFlowEnd0("flutter", label ? label : label_, nonce_);
       nonce_ = 0;
     }
   }

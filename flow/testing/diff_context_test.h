@@ -1,13 +1,19 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef FLUTTER_SHELL_DIFF_CONTEXT_TEST_H_
+#define FLUTTER_SHELL_DIFF_CONTEXT_TEST_H_
+
 #include "flutter/flow/layers/container_layer.h"
-#include "flutter/flow/layers/picture_layer.h"
-#include "flutter/flow/testing/skia_gpu_object_layer_test.h"
+#include "flutter/flow/layers/display_list_layer.h"
+#include "flutter/flow/layers/opacity_layer.h"
+#include "flutter/flow/testing/layer_test.h"
 #include "third_party/skia/include/core/SkPicture.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 
 namespace flutter {
 namespace testing {
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
 
 class MockLayerTree {
  public:
@@ -28,20 +34,24 @@ class MockLayerTree {
   SkISize size_;
 };
 
-class DiffContextTest : public ThreadTest {
+class DiffContextTest : public LayerTest {
  public:
   DiffContextTest();
 
   Damage DiffLayerTree(MockLayerTree& layer_tree,
                        const MockLayerTree& old_layer_tree,
-                       const SkIRect& additional_damage = SkIRect::MakeEmpty());
+                       const SkIRect& additional_damage = SkIRect::MakeEmpty(),
+                       int horizontal_clip_alignment = 0,
+                       int vertical_alignment = 0,
+                       bool use_raster_cache = true);
 
-  // Create picture consisting of filled rect with given color; Being able
+  // Create display list consisting of filled rect with given color; Being able
   // to specify different color is useful to test deep comparison of pictures
-  sk_sp<SkPicture> CreatePicture(const SkRect& bounds, uint32_t color);
+  sk_sp<DisplayList> CreateDisplayList(const SkRect& bounds,
+                                       DlColor color = DlColor::kBlack());
 
-  std::shared_ptr<PictureLayer> CreatePictureLayer(
-      sk_sp<SkPicture> picture,
+  std::shared_ptr<DisplayListLayer> CreateDisplayListLayer(
+      const sk_sp<DisplayList>& display_list,
       const SkPoint& offset = SkPoint::Make(0, 0));
 
   std::shared_ptr<ContainerLayer> CreateContainerLayer(
@@ -52,13 +62,13 @@ class DiffContextTest : public ThreadTest {
     return CreateContainerLayer({l});
   }
 
-  fml::RefPtr<SkiaUnrefQueue> unref_queue() { return unref_queue_; }
-
- private:
-  fml::RefPtr<SkiaUnrefQueue> unref_queue_;
+  std::shared_ptr<OpacityLayer> CreateOpacityLater(
+      std::initializer_list<std::shared_ptr<Layer>> layers,
+      SkAlpha alpha,
+      const SkPoint& offset = SkPoint::Make(0, 0));
 };
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 }  // namespace testing
 }  // namespace flutter
+
+#endif  // FLUTTER_SHELL_DIFF_CONTEXT_TEST_H_

@@ -2,8 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-part of engine;
+import 'package:ui/ui.dart' as ui;
+
+import '../dom.dart';
+import '../platform_dispatcher.dart';
+import 'semantics.dart';
 
 /// Listens to HTML "click" gestures detected by the browser.
 ///
@@ -15,11 +18,11 @@ class Tappable extends RoleManager {
   Tappable(SemanticsObject semanticsObject)
       : super(Role.tappable, semanticsObject);
 
-  html.EventListener? _clickListener;
+  DomEventListener? _clickListener;
 
   @override
   void update() {
-    final html.Element element = semanticsObject.element;
+    final DomElement element = semanticsObject.element;
 
     semanticsObject.setAriaRole(
         'button', semanticsObject.hasFlag(ui.SemanticsFlag.isButton));
@@ -30,19 +33,20 @@ class Tappable extends RoleManager {
       semanticsObject.element.setAttribute('aria-disabled', 'true');
       _stopListening();
     } else {
+      semanticsObject.element.removeAttribute('aria-disabled');
       // Excluding text fields because text fields have browser-specific logic
       // for recognizing taps and activating the keyboard.
       if (semanticsObject.hasAction(ui.SemanticsAction.tap) &&
           !semanticsObject.hasFlag(ui.SemanticsFlag.isTextField)) {
         if (_clickListener == null) {
-          _clickListener = (_) {
+          _clickListener = createDomEventListener((_) {
             if (semanticsObject.owner.gestureMode !=
                 GestureMode.browserGestures) {
               return;
             }
             EnginePlatformDispatcher.instance.invokeOnSemanticsAction(
                 semanticsObject.id, ui.SemanticsAction.tap, null);
-          };
+          });
           element.addEventListener('click', _clickListener);
         }
       } else {

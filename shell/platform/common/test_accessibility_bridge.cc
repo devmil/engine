@@ -6,20 +6,20 @@
 
 namespace flutter {
 
-std::unique_ptr<FlutterPlatformNodeDelegate>
-TestAccessibilityBridgeDelegate::CreateFlutterPlatformNodeDelegate() {
+std::shared_ptr<FlutterPlatformNodeDelegate>
+TestAccessibilityBridge::CreateFlutterPlatformNodeDelegate() {
   return std::make_unique<FlutterPlatformNodeDelegate>();
 };
 
-void TestAccessibilityBridgeDelegate::OnAccessibilityEvent(
+void TestAccessibilityBridge::OnAccessibilityEvent(
     ui::AXEventGenerator::TargetedEvent targeted_event) {
-  accessibilitiy_events.push_back(targeted_event);
+  accessibility_events.push_back(targeted_event.event_params.event);
 }
 
-void TestAccessibilityBridgeDelegate::DispatchAccessibilityAction(
+void TestAccessibilityBridge::DispatchAccessibilityAction(
     AccessibilityNodeId target,
     FlutterSemanticsAction action,
-    const std::vector<uint8_t>& data) {
+    fml::MallocMapping data) {
   performed_actions.push_back(action);
 }
 

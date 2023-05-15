@@ -22,7 +22,6 @@
 
 #include "font_style.h"
 #include "font_weight.h"
-#include "minikin/LineBreaker.h"
 #include "text_style.h"
 
 namespace txt {
@@ -48,12 +47,6 @@ enum class TextDirection {
 // the line will use the default font metric provided ascent/descent and
 // ParagraphStyle.height or TextStyle.height will not take effect.
 //
-// kEvenLeading determines how the leading is distributed over and under the
-// text. When true, half of the leading is added to the top of the text and the
-// other half is added to the bottom of the text. Otherwise, instead of
-// distributing the space evenly, it's distributed proportionally to the font's
-// ascent/descent ratio.
-//
 // The default behavior is kAll where height adjustments are enabled for all
 // lines.
 //
@@ -66,7 +59,6 @@ enum TextHeightBehavior {
   kDisableFirstAscent = 0x1,
   kDisableLastDescent = 0x2,
   kDisableAll = 0x1 | 0x2,
-  kEvenLeading = 0x1 << 2,
 };
 
 class ParagraphStyle {
@@ -92,7 +84,6 @@ class ParagraphStyle {
   double strut_height = 1;
   bool strut_has_height_override = false;
   bool strut_half_leading = false;
-  bool strut_has_leading_distribution_override = false;
   double strut_leading = -1;  // Negative to use font's default leading. [0,inf)
                               // to use custom leading as a ratio of font size.
   bool force_strut_height = false;
@@ -103,13 +94,6 @@ class ParagraphStyle {
   size_t max_lines = std::numeric_limits<size_t>::max();
   std::u16string ellipsis;
   std::string locale;
-
-  // Default strategy is kBreakStrategy_Greedy. Sometimes,
-  // kBreakStrategy_HighQuality will produce more desirable layouts (e.g., very
-  // long words are more likely to be reasonably placed).
-  // kBreakStrategy_Balanced will balance between the two.
-  minikin::BreakStrategy break_strategy =
-      minikin::BreakStrategy::kBreakStrategy_Greedy;
 
   TextStyle GetTextStyle() const;
 

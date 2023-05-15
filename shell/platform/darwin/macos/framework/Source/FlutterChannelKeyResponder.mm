@@ -5,7 +5,7 @@
 #import <objc/message.h>
 
 #import "FlutterChannelKeyResponder.h"
-#import "KeyCodeMap_internal.h"
+#import "KeyCodeMap_Internal.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterCodecs.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterViewController_Internal.h"
 #import "flutter/shell/platform/embedder/embedder.h"
@@ -29,6 +29,8 @@
 
 @implementation FlutterChannelKeyResponder
 
+@synthesize layoutMap;
+
 - (nonnull instancetype)initWithChannel:(nonnull FlutterBasicMessageChannel*)channel {
   self = [super init];
   if (self != nil) {
@@ -39,6 +41,8 @@
 }
 
 - (void)handleEvent:(NSEvent*)event callback:(FlutterAsyncKeyCallback)callback {
+  // Remove the modifier bits that Flutter is not interested in.
+  NSEventModifierFlags modifierFlags = event.modifierFlags & ~0x100;
   NSString* type;
   switch (event.type) {
     case NSEventTypeKeyDown:
@@ -48,21 +52,28 @@
       type = @"keyup";
       break;
     case NSEventTypeFlagsChanged:
-      if (event.modifierFlags < _previouslyPressedFlags) {
+      if (modifierFlags < _previouslyPressedFlags) {
         type = @"keyup";
-      } else {
+      } else if (modifierFlags > _previouslyPressedFlags) {
         type = @"keydown";
+      } else {
+        // ignore duplicate modifiers; This can happen in situations like switching
+        // between application windows when MacOS only sends the up event to new window.
+        callback(true);
+        return;
       }
       break;
-    default:
+    default: {
       NSAssert(false, @"Unexpected key event type (got %lu).", event.type);
+      callback(false);
+    }
   }
-  _previouslyPressedFlags = event.modifierFlags;
+  _previouslyPressedFlags = modifierFlags;
   NSMutableDictionary* keyMessage = [@{
     @"keymap" : @"macos",
     @"type" : type,
     @"keyCode" : @(event.keyCode),
-    @"modifiers" : @(event.modifierFlags),
+    @"modifiers" : @(modifierFlags),
   } mutableCopy];
   // Calling these methods on any other type of event
   // (e.g NSEventTypeFlagsChanged) will raise an exception.
@@ -70,15 +81,19 @@
     keyMessage[@"characters"] = event.characters;
     keyMessage[@"charactersIgnoringModifiers"] = event.charactersIgnoringModifiers;
   }
-  [_channel sendMessage:keyMessage
-                  reply:^(id reply) {
-                    if (!reply) {
-                      return callback(true);
-                    }
-                    // Only propagate the event to other responders if the framework didn't handle
-                    // it.
-                    callback([[reply valueForKey:@"handled"] boolValue]);
-                  }];
+  NSNumber* specifiedLogicalKey = layoutMap[@(event.keyCode)];
+  if (specifiedLogicalKey != nil) {
+    keyMessage[@"specifiedLogicalKey"] = specifiedLogicalKey;
+  }
+  [self.channel sendMessage:keyMessage
+                      reply:^(id reply) {
+                        if (!reply) {
+                          return callback(true);
+                        }
+                        // Only propagate the event to other responders if the framework didn't
+                        // handle it.
+                        callback([[reply valueForKey:@"handled"] boolValue]);
+                      }];
 }
 
 #pragma mark - Private

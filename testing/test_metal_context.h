@@ -9,7 +9,6 @@
 #include <mutex>
 
 #include "third_party/skia/include/gpu/GrDirectContext.h"
-#include "third_party/skia/include/gpu/mtl/GrMtlTypes.h"
 
 namespace flutter {
 
@@ -42,8 +41,8 @@ class TestMetalContext {
   void* command_queue_;
   sk_sp<GrDirectContext> skia_context_;
   std::mutex textures_mutex;
-  int64_t texture_id_ctr_ = 1;                    // guarded by textures_mutex
-  std::map<int64_t, sk_cf_obj<void*>> textures_;  // guarded by textures_mutex
+  int64_t texture_id_ctr_ = 1;                 // guarded by textures_mutex
+  std::map<int64_t, sk_cfp<void*>> textures_;  // guarded by textures_mutex
 };
 
 }  // namespace flutter

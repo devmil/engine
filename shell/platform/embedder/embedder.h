@@ -25,9 +25,16 @@
 // - Function signatures (names, argument counts, argument order, and argument
 //   type) cannot change.
 // - The core behavior of existing functions cannot change.
+// - Instead of nesting structures by value within another structure, prefer
+//   nesting by pointer. This ensures that adding members to the nested struct
+//   does not break the ABI of the parent struct.
+// - Instead of array of structures, prefer array of pointers to structures.
+//   This ensures that array indexing does not break if members are added
+//   to the structure.
 //
 // These changes are allowed:
-// - Adding new struct members at the end of a structure.
+// - Adding new struct members at the end of a structure as long as the struct
+//   is not nested within another struct by value.
 // - Adding new enum members with a new value.
 // - Renaming a struct member as long as its type, size, and intent remain the
 //   same.
@@ -76,6 +83,7 @@ typedef enum {
   /// iOS version >= 10.0 (device), 13.0 (simulator)
   /// macOS version >= 10.14
   kMetal,
+  kVulkan,
 } FlutterRendererType;
 
 /// Additional accessibility features that may be enabled by the platform.
@@ -91,8 +99,12 @@ typedef enum {
   /// Request that text be rendered at a bold font weight.
   kFlutterAccessibilityFeatureBoldText = 1 << 3,
   /// Request that certain animations be simplified and parallax effects
-  // removed.
+  /// removed.
   kFlutterAccessibilityFeatureReduceMotion = 1 << 4,
+  /// Request that UI be rendered with darker colors.
+  kFlutterAccessibilityFeatureHighContrast = 1 << 5,
+  /// Request to show on/off labels inside switches.
+  kFlutterAccessibilityFeatureOnOffSwitchLabels = 1 << 6,
 } FlutterAccessibilityFeature;
 
 /// The set of possible actions that can be conveyed to a semantics node.
@@ -148,6 +160,8 @@ typedef enum {
   kFlutterSemanticsActionMoveCursorForwardByWord = 1 << 19,
   /// Move the cursor backward by one word.
   kFlutterSemanticsActionMoveCursorBackwardByWord = 1 << 20,
+  /// Replace the current text in the text field.
+  kFlutterSemanticsActionSetText = 1 << 21,
 } FlutterSemanticsAction;
 
 /// The set of properties that may be associated with a semantics node.
@@ -202,6 +216,12 @@ typedef enum {
   /// `PageView` widget does not have implicit scrolling, so that users don't
   /// navigate to the next page when reaching the end of the current one.
   kFlutterSemanticsFlagHasImplicitScrolling = 1 << 18,
+  /// Whether the value of the semantics node is coming from a multi-line text
+  /// field.
+  ///
+  /// This is used for text fields to distinguish single-line text fields from
+  /// multi-line ones.
+  kFlutterSemanticsFlagIsMultiline = 1 << 19,
   /// Whether the semantic node is read only.
   ///
   /// Only applicable when kFlutterSemanticsFlagIsTextField flag is on.
@@ -210,6 +230,12 @@ typedef enum {
   kFlutterSemanticsFlagIsFocusable = 1 << 21,
   /// Whether the semantics node represents a link.
   kFlutterSemanticsFlagIsLink = 1 << 22,
+  /// Whether the semantics node represents a slider.
+  kFlutterSemanticsFlagIsSlider = 1 << 23,
+  /// Whether the semantics node represents a keyboard key.
+  kFlutterSemanticsFlagIsKeyboardKey = 1 << 24,
+  /// Whether the semantics node represents a tristate checkbox in mixed state.
+  kFlutterSemanticsFlagIsCheckStateMixed = 1 << 25,
 } FlutterSemanticsFlag;
 
 typedef enum {
@@ -220,6 +246,18 @@ typedef enum {
   /// Text is read from left to right.
   kFlutterTextDirectionLTR = 2,
 } FlutterTextDirection;
+
+/// Valid values for priority of Thread.
+typedef enum {
+  /// Suitable for threads that shouldn't disrupt high priority work.
+  kBackground = 0,
+  /// Default priority level.
+  kNormal = 1,
+  /// Suitable for threads which generate data for the display.
+  kDisplay = 2,
+  /// Suitable for thread which raster data.
+  kRaster = 3,
+} FlutterThreadPriority;
 
 typedef struct _FlutterEngine* FLUTTER_API_SYMBOL(FlutterEngine);
 
@@ -254,6 +292,63 @@ typedef enum {
   /// using the FlutterOpenGLFramebuffer struct.
   kFlutterOpenGLTargetTypeFramebuffer,
 } FlutterOpenGLTargetType;
+
+/// A pixel format to be used for software rendering.
+///
+/// A single pixel always stored as a POT number of bytes. (so in practice
+/// either 1, 2, 4, 8, 16 bytes per pixel)
+///
+/// There are two kinds of pixel formats:
+///   - formats where all components are 8 bits, called array formats
+///     The component order as specified in the pixel format name is the
+///     order of the components' bytes in memory, with the leftmost component
+///     occupying the lowest memory address.
+///
+///   - all other formats are called packed formats, and the component order
+///     as specified in the format name refers to the order in the native type.
+///     for example, for kFlutterSoftwarePixelFormatRGB565, the R component
+///     uses the 5 least significant bits of the uint16_t pixel value.
+///
+/// Each pixel format in this list is documented with an example on how to get
+/// the color components from the pixel.
+/// - for packed formats, p is the pixel value as a word. For example, you can
+///   get the pixel value for a RGB565 formatted buffer like this:
+///   uint16_t p = ((const uint16_t*) allocation)[row_bytes * y / bpp + x];
+///   (with bpp being the bytes per pixel, so 2 for RGB565)
+///
+/// - for array formats, p is a pointer to the pixel value. For example, you
+///   can get the p for a RGBA8888 formatted buffer like this:
+///   const uint8_t *p = ((const uint8_t*) allocation) + row_bytes*y + x*4;
+typedef enum {
+  /// pixel with 8 bit grayscale value.
+  /// The grayscale value is the luma value calculated from r, g, b
+  /// according to BT.709. (gray = r*0.2126 + g*0.7152 + b*0.0722)
+  kFlutterSoftwarePixelFormatGray8,
+
+  /// pixel with 5 bits red, 6 bits green, 5 bits blue, in 16-bit word.
+  ///   r = p & 0x3F; g = (p>>5) & 0x3F; b = p>>11;
+  kFlutterSoftwarePixelFormatRGB565,
+
+  /// pixel with 4 bits for alpha, red, green, blue; in 16-bit word.
+  ///   r = p & 0xF;  g = (p>>4) & 0xF;  b = (p>>8) & 0xF;   a = p>>12;
+  kFlutterSoftwarePixelFormatRGBA4444,
+
+  /// pixel with 8 bits for red, green, blue, alpha.
+  ///   r = p[0]; g = p[1]; b = p[2]; a = p[3];
+  kFlutterSoftwarePixelFormatRGBA8888,
+
+  /// pixel with 8 bits for red, green and blue and 8 unused bits.
+  ///   r = p[0]; g = p[1]; b = p[2];
+  kFlutterSoftwarePixelFormatRGBX8888,
+
+  /// pixel with 8 bits for blue, green, red and alpha.
+  ///   r = p[2]; g = p[1]; b = p[0]; a = p[3];
+  kFlutterSoftwarePixelFormatBGRA8888,
+
+  /// either kFlutterSoftwarePixelFormatBGRA8888 or
+  /// kFlutterSoftwarePixelFormatRGBA8888 depending on CPU endianess and OS
+  kFlutterSoftwarePixelFormatNative32,
+} FlutterSoftwarePixelFormat;
 
 typedef struct {
   /// Target texture of the active texture unit (example GL_TEXTURE_2D or
@@ -309,6 +404,7 @@ typedef bool (*TextureFrameCallback)(void* /* user data */,
                                      size_t /* height */,
                                      FlutterOpenGLTexture* /* texture out */);
 typedef void (*VsyncCallback)(void* /* user data */, intptr_t /* baton */);
+typedef void (*OnPreEngineRestartCallback)(void* /* user data */);
 
 /// A structure to represent the width and height.
 typedef struct {
@@ -347,10 +443,22 @@ typedef struct {
   FlutterSize lower_left_corner_radius;
 } FlutterRoundedRect;
 
+/// A structure to represent a damage region.
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterDamage).
+  size_t struct_size;
+  /// The number of rectangles within the damage region.
+  size_t num_rects;
+  /// The actual damage region(s) in question.
+  FlutterRect* damage;
+} FlutterDamage;
+
 /// This information is passed to the embedder when requesting a frame buffer
 /// object.
 ///
-/// See: \ref FlutterOpenGLRendererConfig.fbo_with_frame_info_callback.
+/// See: \ref FlutterOpenGLRendererConfig.fbo_with_frame_info_callback,
+/// \ref FlutterMetalRendererConfig.get_next_drawable_callback,
+/// and \ref FlutterVulkanRendererConfig.get_next_image_callback.
 typedef struct {
   /// The size of this struct. Must be sizeof(FlutterFrameInfo).
   size_t struct_size;
@@ -363,14 +471,25 @@ typedef uint32_t (*UIntFrameInfoCallback)(
     void* /* user data */,
     const FlutterFrameInfo* /* frame info */);
 
+/// Callback for when a frame buffer object is requested with necessary
+/// information for partial repaint.
+typedef void (*FlutterFrameBufferWithDamageCallback)(
+    void* /* user data */,
+    const intptr_t /* fbo id */,
+    FlutterDamage* /* existing damage */);
+
 /// This information is passed to the embedder when a surface is presented.
 ///
 /// See: \ref FlutterOpenGLRendererConfig.present_with_info.
 typedef struct {
-  /// The size of this struct. Must be sizeof(FlutterFrameInfo).
+  /// The size of this struct. Must be sizeof(FlutterPresentInfo).
   size_t struct_size;
   /// Id of the fbo backing the surface that was presented.
   uint32_t fbo_id;
+  /// Damage representing the area that the compositor needs to render.
+  FlutterDamage frame_damage;
+  /// Damage used to set the buffer's damage region.
+  FlutterDamage buffer_damage;
 } FlutterPresentInfo;
 
 /// Callback for when a surface is presented.
@@ -385,7 +504,10 @@ typedef struct {
   BoolCallback clear_current;
   /// Specifying one (and only one) of `present` or `present_with_info` is
   /// required. Specifying both is an error and engine initialization will be
-  /// terminated. The return value indicates success of the present call.
+  /// terminated. The return value indicates success of the present call. If
+  /// the intent is to use dirty region management, present_with_info must be
+  /// defined as present will not succeed in communicating information about
+  /// damage.
   BoolCallback present;
   /// Specifying one (and only one) of the `fbo_callback` or
   /// `fbo_with_frame_info_callback` is required. Specifying both is an error
@@ -434,8 +556,27 @@ typedef struct {
   /// required. Specifying both is an error and engine initialization will be
   /// terminated. When using this variant, the embedder is passed a
   /// `FlutterPresentInfo` struct that the embedder can use to release any
-  /// resources. The return value indicates success of the present call.
+  /// resources. The return value indicates success of the present call. This
+  /// callback is essential for dirty region management. If not defined, all the
+  /// pixels on the screen will be rendered at every frame (regardless of
+  /// whether damage is actually being computed or not). This is because the
+  /// information that is passed along to the callback contains the frame and
+  /// buffer damage that are essential for dirty region management.
   BoolPresentInfoCallback present_with_info;
+  /// Specifying this callback is a requirement for dirty region management.
+  /// Dirty region management will only render the areas of the screen that have
+  /// changed in between frames, greatly reducing rendering times and energy
+  /// consumption. To take advantage of these benefits, it is necessary to
+  /// define populate_existing_damage as a callback that takes user
+  /// data, an FBO ID, and an existing damage FlutterDamage. The callback should
+  /// use the given FBO ID to identify the FBO's exisiting damage (i.e. areas
+  /// that have changed since the FBO was last used) and use it to populate the
+  /// given existing damage variable. This callback is dependent on either
+  /// fbo_callback or fbo_with_frame_info_callback being defined as they are
+  /// responsible for providing populate_existing_damage with the FBO's
+  /// ID. Not specifying populate_existing_damage will result in full
+  /// repaint (i.e. rendering all the pixels on the screen at every frame).
+  FlutterFrameBufferWithDamageCallback populate_existing_damage;
 } FlutterOpenGLRendererConfig;
 
 /// Alias for id<MTLDevice>.
@@ -452,6 +593,12 @@ typedef enum {
   kYUVA,
   kRGBA,
 } FlutterMetalExternalTexturePixelFormat;
+
+/// YUV color space for the YUV external texture.
+typedef enum {
+  kBT601FullRange,
+  kBT601LimitedRange,
+} FlutterMetalExternalTextureYUVColorSpace;
 
 typedef struct {
   /// The size of this struct. Must be sizeof(FlutterMetalExternalTexture).
@@ -473,6 +620,8 @@ typedef struct {
   /// `FlutterEngineUnregisterExternalTexture`, the embedder has to release
   /// these textures.
   FlutterMetalTextureHandle* textures;
+  /// The YUV color space of the YUV external texture.
+  FlutterMetalExternalTextureYUVColorSpace yuv_color_space;
 } FlutterMetalExternalTexture;
 
 /// Callback to provide an external texture for a given texture_id.
@@ -489,12 +638,21 @@ typedef struct {
   size_t struct_size;
   /// Embedder provided unique identifier to the texture buffer. Given that the
   /// `texture` handle is passed to the engine to render to, the texture buffer
-  /// is itseld owned by the embedder. This `texture_id` is then also given to
+  /// is itself owned by the embedder. This `texture_id` is then also given to
   /// the embedder in the present callback.
   int64_t texture_id;
   /// Handle to the MTLTexture that is owned by the embedder. Engine will render
   /// the frame into this texture.
+  ///
+  /// A NULL texture is considered invalid.
   FlutterMetalTextureHandle texture;
+  /// A baton that is not interpreted by the engine in any way. It will be given
+  /// back to the embedder in the destruction callback below. Embedder resources
+  /// may be associated with this baton.
+  void* user_data;
+  /// The callback invoked by the engine when it no longer needs this backing
+  /// store.
+  VoidCallback destruction_callback;
 } FlutterMetalTexture;
 
 /// Callback for when a metal texture is requested.
@@ -529,6 +687,104 @@ typedef struct {
   FlutterMetalTextureFrameCallback external_texture_frame_callback;
 } FlutterMetalRendererConfig;
 
+/// Alias for VkInstance.
+typedef void* FlutterVulkanInstanceHandle;
+
+/// Alias for VkPhysicalDevice.
+typedef void* FlutterVulkanPhysicalDeviceHandle;
+
+/// Alias for VkDevice.
+typedef void* FlutterVulkanDeviceHandle;
+
+/// Alias for VkQueue.
+typedef void* FlutterVulkanQueueHandle;
+
+/// Alias for VkImage.
+typedef uint64_t FlutterVulkanImageHandle;
+
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterVulkanImage).
+  size_t struct_size;
+  /// Handle to the VkImage that is owned by the embedder. The engine will
+  /// bind this image for writing the frame.
+  FlutterVulkanImageHandle image;
+  /// The VkFormat of the image (for example: VK_FORMAT_R8G8B8A8_UNORM).
+  uint32_t format;
+} FlutterVulkanImage;
+
+/// Callback to fetch a Vulkan function pointer for a given instance. Normally,
+/// this should return the results of vkGetInstanceProcAddr.
+typedef void* (*FlutterVulkanInstanceProcAddressCallback)(
+    void* /* user data */,
+    FlutterVulkanInstanceHandle /* instance */,
+    const char* /* name */);
+
+/// Callback for when a VkImage is requested.
+typedef FlutterVulkanImage (*FlutterVulkanImageCallback)(
+    void* /* user data */,
+    const FlutterFrameInfo* /* frame info */);
+
+/// Callback for when a VkImage has been written to and is ready for use by the
+/// embedder.
+typedef bool (*FlutterVulkanPresentCallback)(
+    void* /* user data */,
+    const FlutterVulkanImage* /* image */);
+
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterVulkanRendererConfig).
+  size_t struct_size;
+
+  /// The Vulkan API version. This should match the value set in
+  /// VkApplicationInfo::apiVersion when the VkInstance was created.
+  uint32_t version;
+  /// VkInstance handle. Must not be destroyed before `FlutterEngineShutdown` is
+  /// called.
+  FlutterVulkanInstanceHandle instance;
+  /// VkPhysicalDevice handle.
+  FlutterVulkanPhysicalDeviceHandle physical_device;
+  /// VkDevice handle. Must not be destroyed before `FlutterEngineShutdown` is
+  /// called.
+  FlutterVulkanDeviceHandle device;
+  /// The queue family index of the VkQueue supplied in the next field.
+  uint32_t queue_family_index;
+  /// VkQueue handle.
+  FlutterVulkanQueueHandle queue;
+  /// The number of instance extensions available for enumerating in the next
+  /// field.
+  size_t enabled_instance_extension_count;
+  /// Array of enabled instance extension names. This should match the names
+  /// passed to `VkInstanceCreateInfo.ppEnabledExtensionNames` when the instance
+  /// was created, but any subset of enabled instance extensions may be
+  /// specified.
+  /// This field is optional; `nullptr` may be specified.
+  /// This memory is only accessed during the call to FlutterEngineInitialize.
+  const char** enabled_instance_extensions;
+  /// The number of device extensions available for enumerating in the next
+  /// field.
+  size_t enabled_device_extension_count;
+  /// Array of enabled logical device extension names. This should match the
+  /// names passed to `VkDeviceCreateInfo.ppEnabledExtensionNames` when the
+  /// logical device was created, but any subset of enabled logical device
+  /// extensions may be specified.
+  /// This field is optional; `nullptr` may be specified.
+  /// This memory is only accessed during the call to FlutterEngineInitialize.
+  /// For example: VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME
+  const char** enabled_device_extensions;
+  /// The callback invoked when resolving Vulkan function pointers.
+  FlutterVulkanInstanceProcAddressCallback get_instance_proc_address_callback;
+  /// The callback invoked when the engine requests a VkImage from the embedder
+  /// for rendering the next frame.
+  /// Not used if a FlutterCompositor is supplied in FlutterProjectArgs.
+  FlutterVulkanImageCallback get_next_image_callback;
+  /// The callback invoked when a VkImage has been written to and is ready for
+  /// use by the embedder. Prior to calling this callback, the engine performs
+  /// a host sync, and so the VkImage can be used in a pipeline by the embedder
+  /// without any additional synchronization.
+  /// Not used if a FlutterCompositor is supplied in FlutterProjectArgs.
+  FlutterVulkanPresentCallback present_image_callback;
+
+} FlutterVulkanRendererConfig;
+
 typedef struct {
   /// The size of this struct. Must be sizeof(FlutterSoftwareRendererConfig).
   size_t struct_size;
@@ -545,6 +801,7 @@ typedef struct {
     FlutterOpenGLRendererConfig open_gl;
     FlutterSoftwareRendererConfig software;
     FlutterMetalRendererConfig metal;
+    FlutterVulkanRendererConfig vulkan;
   };
 } FlutterRendererConfig;
 
@@ -561,6 +818,14 @@ typedef struct {
   size_t left;
   /// Vertical physical location of the top of the window on the screen.
   size_t top;
+  /// Top inset of window.
+  double physical_view_inset_top;
+  /// Right inset of window.
+  double physical_view_inset_right;
+  /// Bottom inset of window.
+  double physical_view_inset_bottom;
+  /// Left inset of window.
+  double physical_view_inset_left;
 } FlutterWindowMetricsEvent;
 
 /// The phase of the pointer event.
@@ -573,7 +838,7 @@ typedef enum {
   /// any other buttons are still pressed when one button is released, that
   /// should be sent as a kMove rather than a kUp.
   kUp,
-  /// The pointer, which must have been been up, is now down.
+  /// The pointer, which must have been up, is now down.
   ///
   /// For touch, this means that the pointer has come into contact with the
   /// screen. For a mouse, it means a button is now pressed. Note that if any
@@ -597,12 +862,20 @@ typedef enum {
   kRemove,
   /// The pointer moved while up.
   kHover,
+  /// A pan/zoom started on this pointer.
+  kPanZoomStart,
+  /// The pan/zoom updated.
+  kPanZoomUpdate,
+  /// The pan/zoom ended.
+  kPanZoomEnd,
 } FlutterPointerPhase;
 
 /// The device type that created a pointer event.
 typedef enum {
   kFlutterPointerDeviceKindMouse = 1,
   kFlutterPointerDeviceKindTouch,
+  kFlutterPointerDeviceKindStylus,
+  kFlutterPointerDeviceKindTrackpad,
 } FlutterPointerDeviceKind;
 
 /// Flags for the `buttons` field of `FlutterPointerEvent` when `device_kind`
@@ -621,6 +894,8 @@ typedef enum {
 typedef enum {
   kFlutterPointerSignalKindNone,
   kFlutterPointerSignalKindScroll,
+  kFlutterPointerSignalKindScrollInertiaCancel,
+  kFlutterPointerSignalKindScale,
 } FlutterPointerSignalKind;
 
 typedef struct {
@@ -651,6 +926,14 @@ typedef struct {
   FlutterPointerDeviceKind device_kind;
   /// The buttons currently pressed, if any.
   int64_t buttons;
+  /// The x offset of the pan/zoom in physical pixels.
+  double pan_x;
+  /// The y offset of the pan/zoom in physical pixels.
+  double pan_y;
+  /// The scale of the pan/zoom, where 1.0 is the initial scale.
+  double scale;
+  /// The rotation of the pan/zoom in radians, where 0.0 is the initial angle.
+  double rotation;
 } FlutterPointerEvent;
 
 typedef enum {
@@ -673,6 +956,14 @@ typedef enum {
 ///    released.
 ///  * All events throughout a key press sequence shall have the same `physical`
 ///    and `logical`. Having different `character`s is allowed.
+///
+/// A `FlutterKeyEvent` with `physical` 0 and `logical` 0 is an empty event.
+/// This is the only case either `physical` or `logical` can be 0. An empty
+/// event must be sent if a key message should be converted to no
+/// `FlutterKeyEvent`s, for example, when a key down message is received for a
+/// key that has already been pressed according to the record. This is to ensure
+/// some `FlutterKeyEvent` arrives at the framework before raw key message.
+/// See https://github.com/flutter/flutter/issues/87230.
 typedef struct {
   /// The size of this struct. Must be sizeof(FlutterKeyEvent).
   size_t struct_size;
@@ -686,11 +977,17 @@ typedef struct {
   ///
   /// For the full definition and list of pre-defined physical keys, see
   /// `PhysicalKeyboardKey` from the framework.
+  ///
+  /// The only case that `physical` might be 0 is when this is an empty event.
+  /// See `FlutterKeyEvent` for introduction.
   uint64_t physical;
   /// The key ID for the logical key of this event.
   ///
   /// For the full definition and a list of pre-defined logical keys, see
   /// `LogicalKeyboardKey` from the framework.
+  ///
+  /// The only case that `logical` might be 0 is when this is an empty event.
+  /// See `FlutterKeyEvent` for introduction.
   uint64_t logical;
   /// Null-terminated character input from the event. Can be null. Ignored for
   /// up events.
@@ -746,7 +1043,8 @@ typedef void (*FlutterDataCallback)(const uint8_t* /* data */,
 typedef int64_t FlutterPlatformViewIdentifier;
 
 /// `FlutterSemanticsNode` ID used as a sentinel to signal the end of a batch of
-/// semantics node updates.
+/// semantics node updates. This is unused if using
+/// `FlutterUpdateSemanticsCallback2`.
 FLUTTER_EXPORT
 extern const int32_t kFlutterSemanticsNodeIdBatchEnd;
 
@@ -755,7 +1053,12 @@ extern const int32_t kFlutterSemanticsNodeIdBatchEnd;
 /// The semantics tree is maintained during the semantics phase of the pipeline
 /// (i.e., during PipelineOwner.flushSemantics), which happens after
 /// compositing. Updates are then pushed to embedders via the registered
-/// `FlutterUpdateSemanticsNodeCallback`.
+/// `FlutterUpdateSemanticsCallback`.
+///
+/// @deprecated     Use `FlutterSemanticsNode2` instead. In order to preserve
+///                 ABI compatibility for existing users, no new fields will be
+///                 added to this struct. New fields will continue to be added
+///                 to `FlutterSemanticsNode2`.
 typedef struct {
   /// The size of this struct. Must be sizeof(FlutterSemanticsNode).
   size_t struct_size;
@@ -797,8 +1100,8 @@ typedef struct {
   /// A value that `value` will have after a kFlutterSemanticsActionDecrease`
   /// action has been performed.
   const char* decreased_value;
-  /// The reading direction for `label`, `value`, `hint`, `increasedValue`, and
-  /// `decreasedValue`.
+  /// The reading direction for `label`, `value`, `hint`, `increasedValue`,
+  /// `decreasedValue`, and `tooltip`.
   FlutterTextDirection text_direction;
   /// The bounding box for this node in its coordinate system.
   FlutterRect rect;
@@ -819,10 +1122,88 @@ typedef struct {
   /// Identifier of the platform view associated with this semantics node, or
   /// -1 if none.
   FlutterPlatformViewIdentifier platform_view_id;
+  /// A textual tooltip attached to the node.
+  const char* tooltip;
 } FlutterSemanticsNode;
 
+/// A node in the Flutter semantics tree.
+///
+/// The semantics tree is maintained during the semantics phase of the pipeline
+/// (i.e., during PipelineOwner.flushSemantics), which happens after
+/// compositing. Updates are then pushed to embedders via the registered
+/// `FlutterUpdateSemanticsCallback2`.
+///
+/// @see https://api.flutter.dev/flutter/semantics/SemanticsNode-class.html
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterSemanticsNode).
+  size_t struct_size;
+  /// The unique identifier for this node.
+  int32_t id;
+  /// The set of semantics flags associated with this node.
+  FlutterSemanticsFlag flags;
+  /// The set of semantics actions applicable to this node.
+  FlutterSemanticsAction actions;
+  /// The position at which the text selection originates.
+  int32_t text_selection_base;
+  /// The position at which the text selection terminates.
+  int32_t text_selection_extent;
+  /// The total number of scrollable children that contribute to semantics.
+  int32_t scroll_child_count;
+  /// The index of the first visible semantic child of a scroll node.
+  int32_t scroll_index;
+  /// The current scrolling position in logical pixels if the node is
+  /// scrollable.
+  double scroll_position;
+  /// The maximum in-range value for `scrollPosition` if the node is scrollable.
+  double scroll_extent_max;
+  /// The minimum in-range value for `scrollPosition` if the node is scrollable.
+  double scroll_extent_min;
+  /// The elevation along the z-axis at which the rect of this semantics node is
+  /// located above its parent.
+  double elevation;
+  /// Describes how much space the semantics node takes up along the z-axis.
+  double thickness;
+  /// A textual description of the node.
+  const char* label;
+  /// A brief description of the result of performing an action on the node.
+  const char* hint;
+  /// A textual description of the current value of the node.
+  const char* value;
+  /// A value that `value` will have after a kFlutterSemanticsActionIncrease`
+  /// action has been performed.
+  const char* increased_value;
+  /// A value that `value` will have after a kFlutterSemanticsActionDecrease`
+  /// action has been performed.
+  const char* decreased_value;
+  /// The reading direction for `label`, `value`, `hint`, `increasedValue`,
+  /// `decreasedValue`, and `tooltip`.
+  FlutterTextDirection text_direction;
+  /// The bounding box for this node in its coordinate system.
+  FlutterRect rect;
+  /// The transform from this node's coordinate system to its parent's
+  /// coordinate system.
+  FlutterTransformation transform;
+  /// The number of children this node has.
+  size_t child_count;
+  /// Array of child node IDs in traversal order. Has length `child_count`.
+  const int32_t* children_in_traversal_order;
+  /// Array of child node IDs in hit test order. Has length `child_count`.
+  const int32_t* children_in_hit_test_order;
+  /// The number of custom accessibility action associated with this node.
+  size_t custom_accessibility_actions_count;
+  /// Array of `FlutterSemanticsCustomAction` IDs associated with this node.
+  /// Has length `custom_accessibility_actions_count`.
+  const int32_t* custom_accessibility_actions;
+  /// Identifier of the platform view associated with this semantics node, or
+  /// -1 if none.
+  FlutterPlatformViewIdentifier platform_view_id;
+  /// A textual tooltip attached to the node.
+  const char* tooltip;
+} FlutterSemanticsNode2;
+
 /// `FlutterSemanticsCustomAction` ID used as a sentinel to signal the end of a
-/// batch of semantics custom action updates.
+/// batch of semantics custom action updates. This is unused if using
+/// `FlutterUpdateSemanticsCallback2`.
 FLUTTER_EXPORT
 extern const int32_t kFlutterSemanticsCustomActionIdBatchEnd;
 
@@ -835,6 +1216,11 @@ extern const int32_t kFlutterSemanticsCustomActionIdBatchEnd;
 /// Action overrides are custom actions that the application developer requests
 /// to be used in place of the standard actions in the `FlutterSemanticsAction`
 /// enum.
+///
+/// @deprecated     Use `FlutterSemanticsCustomAction2` instead. In order to
+///                 preserve ABI compatility for existing users, no new fields
+///                 will be added to this struct. New fields will continue to
+///                 be added to `FlutterSemanticsCustomAction2`.
 typedef struct {
   /// The size of the struct. Must be sizeof(FlutterSemanticsCustomAction).
   size_t struct_size;
@@ -849,6 +1235,65 @@ typedef struct {
   const char* hint;
 } FlutterSemanticsCustomAction;
 
+/// A custom semantics action, or action override.
+///
+/// Custom actions can be registered by applications in order to provide
+/// semantic actions other than the standard actions available through the
+/// `FlutterSemanticsAction` enum.
+///
+/// Action overrides are custom actions that the application developer requests
+/// to be used in place of the standard actions in the `FlutterSemanticsAction`
+/// enum.
+///
+/// @see
+/// https://api.flutter.dev/flutter/semantics/CustomSemanticsAction-class.html
+typedef struct {
+  /// The size of the struct. Must be sizeof(FlutterSemanticsCustomAction).
+  size_t struct_size;
+  /// The unique custom action or action override ID.
+  int32_t id;
+  /// For overridden standard actions, corresponds to the
+  /// `FlutterSemanticsAction` to override.
+  FlutterSemanticsAction override_action;
+  /// The user-readable name of this custom semantics action.
+  const char* label;
+  /// The hint description of this custom semantics action.
+  const char* hint;
+} FlutterSemanticsCustomAction2;
+
+/// A batch of updates to semantics nodes and custom actions.
+///
+/// @deprecated     Use `FlutterSemanticsUpdate2` instead. Adding members
+///                 to `FlutterSemanticsNode` or `FlutterSemanticsCustomAction`
+///                 breaks the ABI of this struct.
+typedef struct {
+  /// The size of the struct. Must be sizeof(FlutterSemanticsUpdate).
+  size_t struct_size;
+  /// The number of semantics node updates.
+  size_t nodes_count;
+  // Array of semantics nodes. Has length `nodes_count`.
+  FlutterSemanticsNode* nodes;
+  /// The number of semantics custom action updates.
+  size_t custom_actions_count;
+  /// Array of semantics custom actions. Has length `custom_actions_count`.
+  FlutterSemanticsCustomAction* custom_actions;
+} FlutterSemanticsUpdate;
+
+/// A batch of updates to semantics nodes and custom actions.
+typedef struct {
+  /// The size of the struct. Must be sizeof(FlutterSemanticsUpdate2).
+  size_t struct_size;
+  /// The number of semantics node updates.
+  size_t node_count;
+  // Array of semantics node pointers. Has length `node_count`.
+  FlutterSemanticsNode2** nodes;
+  /// The number of semantics custom action updates.
+  size_t custom_action_count;
+  /// Array of semantics custom action pointers. Has length
+  /// `custom_action_count`.
+  FlutterSemanticsCustomAction2** custom_actions;
+} FlutterSemanticsUpdate2;
+
 typedef void (*FlutterUpdateSemanticsNodeCallback)(
     const FlutterSemanticsNode* /* semantics node */,
     void* /* user data */);
@@ -856,6 +1301,14 @@ typedef void (*FlutterUpdateSemanticsNodeCallback)(
 typedef void (*FlutterUpdateSemanticsCustomActionCallback)(
     const FlutterSemanticsCustomAction* /* semantics custom action */,
     void* /* user data */);
+
+typedef void (*FlutterUpdateSemanticsCallback)(
+    const FlutterSemanticsUpdate* /* semantics update */,
+    void* /* user data*/);
+
+typedef void (*FlutterUpdateSemanticsCallback2)(
+    const FlutterSemanticsUpdate2* /* semantics update */,
+    void* /* user data*/);
 
 typedef struct _FlutterTaskRunner* FlutterTaskRunner;
 
@@ -911,6 +1364,9 @@ typedef struct {
   /// and platform task runners. This makes the Flutter engine use the same
   /// thread for both task runners.
   const FlutterTaskRunnerDescription* render_task_runner;
+  /// Specify a callback that is used to set the thread priority for embedder
+  /// task runners.
+  void (*thread_priority_setter)(FlutterThreadPriority);
 } FlutterCustomTaskRunners;
 
 typedef struct {
@@ -942,6 +1398,57 @@ typedef struct {
   /// store.
   VoidCallback destruction_callback;
 } FlutterSoftwareBackingStore;
+
+typedef struct {
+  size_t struct_size;
+  /// A pointer to the raw bytes of the allocation described by this software
+  /// backing store.
+  const void* allocation;
+  /// The number of bytes in a single row of the allocation.
+  size_t row_bytes;
+  /// The number of rows in the allocation.
+  size_t height;
+  /// A baton that is not interpreted by the engine in any way. It will be given
+  /// back to the embedder in the destruction callback below. Embedder resources
+  /// may be associated with this baton.
+  void* user_data;
+  /// The callback invoked by the engine when it no longer needs this backing
+  /// store.
+  VoidCallback destruction_callback;
+  /// The pixel format that the engine should use to render into the allocation.
+  /// In most cases, kR
+  FlutterSoftwarePixelFormat pixel_format;
+} FlutterSoftwareBackingStore2;
+
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterMetalBackingStore).
+  size_t struct_size;
+  union {
+    // A Metal texture for Flutter to render into. Ownership is not transferred
+    // to Flutter; the texture is CFRetained on successfully being passed in and
+    // CFReleased when no longer used.
+    FlutterMetalTexture texture;
+  };
+} FlutterMetalBackingStore;
+
+typedef struct {
+  /// The size of this struct. Must be sizeof(FlutterVulkanBackingStore).
+  size_t struct_size;
+  /// The image that the layer will be rendered to. This image must already be
+  /// available for the engine to bind for writing when it's given to the engine
+  /// via the backing store creation callback. The engine will perform a host
+  /// sync for all layers prior to calling the compositor present callback, and
+  /// so the written layer images can be freely bound by the embedder without
+  /// any additional synchronization.
+  const FlutterVulkanImage* image;
+  /// A baton that is not interpreted by the engine in any way. It will be given
+  /// back to the embedder in the destruction callback below. Embedder resources
+  /// may be associated with this baton.
+  void* user_data;
+  /// The callback invoked by the engine when it no longer needs this backing
+  /// store.
+  VoidCallback destruction_callback;
+} FlutterVulkanBackingStore;
 
 typedef enum {
   /// Indicates that the Flutter application requested that an opacity be
@@ -1000,6 +1507,13 @@ typedef enum {
   kFlutterBackingStoreTypeOpenGL,
   /// Specified an software allocation for Flutter to render into using the CPU.
   kFlutterBackingStoreTypeSoftware,
+  /// Specifies a Metal backing store. This is backed by a Metal texture.
+  kFlutterBackingStoreTypeMetal,
+  /// Specifies a Vulkan backing store. This is backed by a Vulkan VkImage.
+  kFlutterBackingStoreTypeVulkan,
+  /// Specifies a allocation that the engine should render into using
+  /// software rendering.
+  kFlutterBackingStoreTypeSoftware2,
 } FlutterBackingStoreType;
 
 typedef struct {
@@ -1019,6 +1533,12 @@ typedef struct {
     FlutterOpenGLBackingStore open_gl;
     /// The description of the software backing store.
     FlutterSoftwareBackingStore software;
+    /// The description of the software backing store.
+    FlutterSoftwareBackingStore2 software2;
+    // The description of the Metal backing store.
+    FlutterMetalBackingStore metal;
+    // The description of the Vulkan backing store.
+    FlutterVulkanBackingStore vulkan;
   };
 } FlutterBackingStore;
 
@@ -1121,6 +1641,14 @@ typedef struct {
   const char* variant_code;
 } FlutterLocale;
 
+/// Callback that returns the system locale.
+///
+/// Embedders that implement this callback should return the `FlutterLocale`
+/// from the `supported_locales` list that most closely matches the
+/// user/device's preferred locale.
+///
+/// This callback does not currently provide the user_data baton.
+/// https://github.com/flutter/flutter/issues/79826
 typedef const FlutterLocale* (*FlutterComputePlatformResolvedLocaleCallback)(
     const FlutterLocale** /* supported_locales*/,
     size_t /* Number of locales*/);
@@ -1143,7 +1671,7 @@ typedef struct {
   bool single_display;
 
   /// This represents the refresh period in frames per second. This value may be
-  /// zero if the device is not running or unavaliable or unknown.
+  /// zero if the device is not running or unavailable or unknown.
   double refresh_rate;
 } FlutterEngineDisplay;
 
@@ -1272,6 +1800,17 @@ typedef struct {
   };
 } FlutterEngineAOTDataSource;
 
+// Logging callback for Dart application messages.
+//
+// The `tag` parameter contains a null-terminated string containing a logging
+// tag or component name that can be used to identify system log messages from
+// the app. The `message` parameter contains a null-terminated string
+// containing the message to be logged. `user_data` is a user data baton passed
+// in `FlutterEngineRun`.
+typedef void (*FlutterLogMessageCallback)(const char* /* tag */,
+                                          const char* /* message */,
+                                          void* /* user_data */);
+
 /// An opaque object that describes the AOT data that can be used to launch a
 /// FlutterEngine instance in AOT mode.
 typedef struct _FlutterEngineAOTData* FlutterEngineAOTData;
@@ -1326,9 +1865,10 @@ typedef struct {
   /// `switches.h` engine source file.
   const char* const* command_line_argv;
   /// The callback invoked by the engine in order to give the embedder the
-  /// chance to respond to platform messages from the Dart application. The
-  /// callback will be invoked on the thread on which the `FlutterEngineRun`
-  /// call is made.
+  /// chance to respond to platform messages from the Dart application.
+  /// The callback will be invoked on the thread on which the `FlutterEngineRun`
+  /// call is made. The second parameter, `user_data`, is supplied when
+  /// `FlutterEngineRun` or `FlutterEngineInitialize` is called.
   FlutterPlatformMessageCallback platform_message_callback;
   /// The VM snapshot data buffer used in AOT operation. This buffer must be
   /// mapped in as read-only. For more information refer to the documentation on
@@ -1365,24 +1905,36 @@ typedef struct {
   /// The callback invoked by the engine in root isolate scope. Called
   /// immediately after the root isolate has been created and marked runnable.
   VoidCallback root_isolate_create_callback;
-  /// The callback invoked by the engine in order to give the embedder the
-  /// chance to respond to semantics node updates from the Dart application.
+  /// The legacy callback invoked by the engine in order to give the embedder
+  /// the chance to respond to semantics node updates from the Dart application.
   /// Semantics node updates are sent in batches terminated by a 'batch end'
   /// callback that is passed a sentinel `FlutterSemanticsNode` whose `id` field
   /// has the value `kFlutterSemanticsNodeIdBatchEnd`.
   ///
   /// The callback will be invoked on the thread on which the `FlutterEngineRun`
   /// call is made.
+  ///
+  /// @deprecated    Use `update_semantics_callback2` instead. Only one of
+  ///                `update_semantics_node_callback`,
+  ///                `update_semantics_callback`, and
+  ///                `update_semantics_callback2` may be provided; the others
+  ///                should be set to null.
   FlutterUpdateSemanticsNodeCallback update_semantics_node_callback;
-  /// The callback invoked by the engine in order to give the embedder the
-  /// chance to respond to updates to semantics custom actions from the Dart
-  /// application.  Custom action updates are sent in batches terminated by a
+  /// The legacy callback invoked by the engine in order to give the embedder
+  /// the chance to respond to updates to semantics custom actions from the Dart
+  /// application. Custom action updates are sent in batches terminated by a
   /// 'batch end' callback that is passed a sentinel
   /// `FlutterSemanticsCustomAction` whose `id` field has the value
   /// `kFlutterSemanticsCustomActionIdBatchEnd`.
   ///
   /// The callback will be invoked on the thread on which the `FlutterEngineRun`
   /// call is made.
+  ///
+  /// @deprecated    Use `update_semantics_callback2` instead. Only one of
+  ///                `update_semantics_node_callback`,
+  ///                `update_semantics_callback`, and
+  ///                `update_semantics_callback2` may be provided; the others
+  ///                should be set to null.
   FlutterUpdateSemanticsCustomActionCallback
       update_semantics_custom_action_callback;
   /// Path to a directory used to store data that is cached across runs of a
@@ -1495,6 +2047,56 @@ typedef struct {
   /// `FlutterProjectArgs`.
   const char* const* dart_entrypoint_argv;
 
+  // Logging callback for Dart application messages.
+  //
+  // This callback is used by embedder to log print messages from the running
+  // Flutter application. This callback is made on an internal engine managed
+  // thread and embedders must re-thread if necessary. Performing blocking calls
+  // in this callback may introduce application jank.
+  FlutterLogMessageCallback log_message_callback;
+
+  // A tag string associated with application log messages.
+  //
+  // A log message tag string that can be used convey application, subsystem,
+  // or component name to embedder's logger. This string will be passed to to
+  // callbacks on `log_message_callback`. Defaults to "flutter" if unspecified.
+  const char* log_tag;
+
+  // A callback that is invoked right before the engine is restarted.
+  //
+  // This optional callback is typically used to reset states to as if the
+  // engine has just been started, and usually indicates the user has requested
+  // a hot restart (Shift-R in the Flutter CLI.) It is not called the first time
+  // the engine starts.
+  //
+  // The first argument is the `user_data` from `FlutterEngineInitialize`.
+  OnPreEngineRestartCallback on_pre_engine_restart_callback;
+
+  /// The callback invoked by the engine in order to give the embedder the
+  /// chance to respond to updates to semantics nodes and custom actions from
+  /// the Dart application.
+  ///
+  /// The callback will be invoked on the thread on which the `FlutterEngineRun`
+  /// call is made.
+  ///
+  /// @deprecated    Use `update_semantics_callback2` instead. Only one of
+  ///                `update_semantics_node_callback`,
+  ///                `update_semantics_callback`, and
+  ///                `update_semantics_callback2` may be provided; the others
+  ///                must be set to null.
+  FlutterUpdateSemanticsCallback update_semantics_callback;
+
+  /// The callback invoked by the engine in order to give the embedder the
+  /// chance to respond to updates to semantics nodes and custom actions from
+  /// the Dart application.
+  ///
+  /// The callback will be invoked on the thread on which the `FlutterEngineRun`
+  /// call is made.
+  ///
+  /// Only one of `update_semantics_node_callback`, `update_semantics_callback`,
+  /// and `update_semantics_callback2` may be provided; the others must be set
+  /// to null.
+  FlutterUpdateSemanticsCallback2 update_semantics_callback2;
 } FlutterProjectArgs;
 
 #ifndef FLUTTER_ENGINE_NO_PROTOTYPES
@@ -1836,8 +2438,8 @@ FlutterEngineResult FlutterEngineMarkExternalTextureFrameAvailable(
 /// @param[in]  engine     A running engine instance.
 /// @param[in]  enabled    When enabled, changes to the semantic contents of the
 ///                        window are sent via the
-///                        `FlutterUpdateSemanticsNodeCallback` registered to
-///                        `update_semantics_node_callback` in
+///                        `FlutterUpdateSemanticsCallback2` registered to
+///                        `update_semantics_callback2` in
 ///                        `FlutterProjectArgs`.
 ///
 /// @return     The result of the call.
@@ -1864,7 +2466,7 @@ FlutterEngineResult FlutterEngineUpdateAccessibilityFeatures(
 /// @brief      Dispatch a semantics action to the specified semantics node.
 ///
 /// @param[in]  engine       A running engine instance.
-/// @param[in]  identifier   The semantics action identifier.
+/// @param[in]  node_id      The semantics node identifier.
 /// @param[in]  action       The semantics action.
 /// @param[in]  data         Data associated with the action.
 /// @param[in]  data_length  The data length.
@@ -1874,7 +2476,7 @@ FlutterEngineResult FlutterEngineUpdateAccessibilityFeatures(
 FLUTTER_EXPORT
 FlutterEngineResult FlutterEngineDispatchSemanticsAction(
     FLUTTER_API_SYMBOL(FlutterEngine) engine,
-    uint64_t id,
+    uint64_t node_id,
     FlutterSemanticsAction action,
     const uint8_t* data,
     size_t data_length);
@@ -2157,6 +2759,37 @@ FlutterEngineResult FlutterEngineNotifyDisplayUpdate(
     const FlutterEngineDisplay* displays,
     size_t display_count);
 
+//------------------------------------------------------------------------------
+/// @brief      Schedule a new frame to redraw the content.
+///
+/// @param[in]  engine     A running engine instance.
+///
+/// @return the result of the call made to the engine.
+///
+FLUTTER_EXPORT
+FlutterEngineResult FlutterEngineScheduleFrame(FLUTTER_API_SYMBOL(FlutterEngine)
+                                                   engine);
+
+//------------------------------------------------------------------------------
+/// @brief      Schedule a callback to be called after the next frame is drawn.
+///             This must be called from the platform thread. The callback is
+///             executed only once from the raster thread; embedders must
+///             re-thread if necessary. Performing blocking calls
+///             in this callback may introduce application jank.
+///
+/// @param[in]  engine     A running engine instance.
+/// @param[in]  callback   The callback to execute.
+/// @param[in]  user_data  A baton passed by the engine to the callback. This
+///                        baton is not interpreted by the engine in any way.
+///
+/// @return     The result of the call.
+///
+FLUTTER_EXPORT
+FlutterEngineResult FlutterEngineSetNextFrameCallback(
+    FLUTTER_API_SYMBOL(FlutterEngine) engine,
+    VoidCallback callback,
+    void* user_data);
+
 #endif  // !FLUTTER_ENGINE_NO_PROTOTYPES
 
 // Typedefs for the function pointers in FlutterEngineProcTable.
@@ -2273,6 +2906,12 @@ typedef FlutterEngineResult (*FlutterEngineNotifyDisplayUpdateFnPtr)(
     FlutterEngineDisplaysUpdateType update_type,
     const FlutterEngineDisplay* displays,
     size_t display_count);
+typedef FlutterEngineResult (*FlutterEngineScheduleFrameFnPtr)(
+    FLUTTER_API_SYMBOL(FlutterEngine) engine);
+typedef FlutterEngineResult (*FlutterEngineSetNextFrameCallbackFnPtr)(
+    FLUTTER_API_SYMBOL(FlutterEngine) engine,
+    VoidCallback callback,
+    void* user_data);
 
 /// Function-pointer-based versions of the APIs above.
 typedef struct {
@@ -2317,6 +2956,8 @@ typedef struct {
   FlutterEnginePostCallbackOnAllNativeThreadsFnPtr
       PostCallbackOnAllNativeThreads;
   FlutterEngineNotifyDisplayUpdateFnPtr NotifyDisplayUpdate;
+  FlutterEngineScheduleFrameFnPtr ScheduleFrame;
+  FlutterEngineSetNextFrameCallbackFnPtr SetNextFrameCallback;
 } FlutterEngineProcTable;
 
 //------------------------------------------------------------------------------

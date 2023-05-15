@@ -12,20 +12,18 @@ namespace flutter {
 
 class BackdropFilterLayer : public ContainerLayer {
  public:
-  BackdropFilterLayer(sk_sp<SkImageFilter> filter);
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
+  BackdropFilterLayer(std::shared_ptr<const DlImageFilter> filter,
+                      DlBlendMode blend_mode);
 
   void Diff(DiffContext* context, const Layer* old_layer) override;
 
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
-
-  void Preroll(PrerollContext* context, const SkMatrix& matrix) override;
+  void Preroll(PrerollContext* context) override;
 
   void Paint(PaintContext& context) const override;
 
  private:
-  sk_sp<SkImageFilter> filter_;
+  std::shared_ptr<const DlImageFilter> filter_;
+  DlBlendMode blend_mode_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(BackdropFilterLayer);
 };

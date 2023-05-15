@@ -14,6 +14,10 @@
 #include "flutter/shell/platform/android/surface/android_native_window.h"
 #include "third_party/skia/include/core/SkSize.h"
 
+namespace impeller {
+class Context;
+}  // namespace impeller
+
 namespace flutter {
 
 class AndroidExternalViewEmbedder;
@@ -37,10 +41,12 @@ class AndroidSurface {
 
   virtual bool SetNativeWindow(fml::RefPtr<AndroidNativeWindow> window) = 0;
 
+  virtual std::unique_ptr<Surface> CreateSnapshotSurface();
+
+  virtual std::shared_ptr<impeller::Context> GetImpellerContext();
+
  protected:
-  explicit AndroidSurface(
-      const std::shared_ptr<AndroidContext>& android_context);
-  std::shared_ptr<AndroidContext> android_context_;
+  AndroidSurface();
 };
 
 class AndroidSurfaceFactory {

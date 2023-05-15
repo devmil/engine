@@ -9,6 +9,8 @@
 #include "flutter/testing/test_metal_context.h"
 #include "flutter/testing/test_metal_surface.h"
 
+#include "third_party/skia/include/core/SkSurface.h"
+
 namespace flutter {
 
 class TestMetalSurfaceImpl : public TestMetalSurface {
@@ -30,6 +32,7 @@ class TestMetalSurfaceImpl : public TestMetalSurface {
   const TestMetalContext& test_metal_context_;
   bool is_valid_ = false;
   sk_sp<SkSurface> surface_;
+  TestMetalContext::TextureInfo texture_info_;
 
   // |TestMetalSurface|
   bool IsValid() const override;
@@ -42,6 +45,9 @@ class TestMetalSurfaceImpl : public TestMetalSurface {
 
   // |TestMetalSurface|
   sk_sp<SkImage> GetRasterSurfaceSnapshot() override;
+
+  // |TestMetalSurface|
+  TestMetalContext::TextureInfo GetTextureInfo() override;
 
   FML_DISALLOW_COPY_AND_ASSIGN(TestMetalSurfaceImpl);
 };

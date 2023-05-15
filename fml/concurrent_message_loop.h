@@ -32,7 +32,9 @@ class ConcurrentMessageLoop
 
   void Terminate();
 
-  void PostTaskToAllWorkers(fml::closure task);
+  void PostTaskToAllWorkers(const fml::closure& task);
+
+  bool RunsTasksOnCurrentThread();
 
  private:
   friend ConcurrentTaskRunner;
@@ -46,7 +48,7 @@ class ConcurrentMessageLoop
   std::map<std::thread::id, std::vector<fml::closure>> thread_tasks_;
   bool shutdown_ = false;
 
-  ConcurrentMessageLoop(size_t worker_count);
+  explicit ConcurrentMessageLoop(size_t worker_count);
 
   void WorkerMain();
 
@@ -61,7 +63,7 @@ class ConcurrentMessageLoop
 
 class ConcurrentTaskRunner : public BasicTaskRunner {
  public:
-  ConcurrentTaskRunner(std::weak_ptr<ConcurrentMessageLoop> weak_loop);
+  explicit ConcurrentTaskRunner(std::weak_ptr<ConcurrentMessageLoop> weak_loop);
 
   virtual ~ConcurrentTaskRunner();
 

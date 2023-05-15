@@ -22,14 +22,15 @@ struct ShellArgs;
 // instance of the Flutter engine.
 class EmbedderEngine {
  public:
-  EmbedderEngine(std::unique_ptr<EmbedderThreadHost> thread_host,
-                 TaskRunners task_runners,
-                 Settings settings,
-                 RunConfiguration run_configuration,
-                 Shell::CreateCallback<PlatformView> on_create_platform_view,
-                 Shell::CreateCallback<Rasterizer> on_create_rasterizer,
-                 std::unique_ptr<EmbedderExternalTextureResolver>
-                     external_texture_resolver);
+  EmbedderEngine(
+      std::unique_ptr<EmbedderThreadHost> thread_host,
+      const TaskRunners& task_runners,
+      const Settings& settings,
+      RunConfiguration run_configuration,
+      const Shell::CreateCallback<PlatformView>& on_create_platform_view,
+      const Shell::CreateCallback<Rasterizer>& on_create_rasterizer,
+      std::unique_ptr<EmbedderExternalTextureResolver>
+          external_texture_resolver);
 
   ~EmbedderEngine();
 
@@ -47,28 +48,12 @@ class EmbedderEngine {
 
   bool IsValid() const;
 
-  bool SetViewportMetrics(flutter::ViewportMetrics metrics);
+  bool SetViewportMetrics(const flutter::ViewportMetrics& metrics);
 
   bool DispatchPointerDataPacket(
       std::unique_ptr<flutter::PointerDataPacket> packet);
 
-  //----------------------------------------------------------------------------
-  /// @brief      Notifies the platform view that the embedder has sent it a key
-  ///             data packet. A key data packet contains one key event. This
-  ///             call originates in the platform view and the shell has
-  ///             forwarded the same to the engine on the UI task runner here.
-  ///             The platform view will decide whether to handle this event,
-  ///             and send the result using `callback`, which will be called
-  ///             exactly once.
-  ///
-  /// @param[in]  packet    The key data packet.
-  /// @param[in]  callback  Called when the framework has decided whether
-  ///                       to handle this key data.
-  ///
-  bool DispatchKeyDataPacket(std::unique_ptr<flutter::KeyDataPacket> packet,
-                             KeyDataResponse callback);
-
-  bool SendPlatformMessage(fml::RefPtr<flutter::PlatformMessage> message);
+  bool SendPlatformMessage(std::unique_ptr<PlatformMessage> message);
 
   bool RegisterTexture(int64_t texture);
 
@@ -80,9 +65,9 @@ class EmbedderEngine {
 
   bool SetAccessibilityFeatures(int32_t flags);
 
-  bool DispatchSemanticsAction(int id,
+  bool DispatchSemanticsAction(int node_id,
                                flutter::SemanticsAction action,
-                               std::vector<uint8_t> args);
+                               fml::MallocMapping args);
 
   bool OnVsyncEvent(intptr_t baton,
                     fml::TimePoint frame_start_time,
@@ -95,7 +80,9 @@ class EmbedderEngine {
   bool RunTask(const FlutterTask* task);
 
   bool PostTaskOnEngineManagedNativeThreads(
-      std::function<void(FlutterNativeThreadType)> closure) const;
+      const std::function<void(FlutterNativeThreadType)>& closure) const;
+
+  bool ScheduleFrame();
 
   Shell& GetShell();
 
